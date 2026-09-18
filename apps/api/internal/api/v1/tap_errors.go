@@ -61,6 +61,8 @@ func writeTapError(ctx *gin.Context, err error) {
 			"Cannot price this payment right now. Try again in a moment."},
 		{tap.ErrTapUnknown, http.StatusNotFound, "tap_not_found",
 			"No such payment."},
+		{tap.ErrRepeatTap, http.StatusConflict, "tap_repeated",
+			"This card was already charged this amount here a moment ago. If this is a separate payment, lift the card off the phone, wait a few seconds, and tap again."},
 	} {
 		if errors.Is(err, m.target) {
 			// The detail goes in the log, not the response: "₦8,000 available,

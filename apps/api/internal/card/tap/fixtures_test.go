@@ -111,6 +111,17 @@ type fixture struct {
 	Anchor     []byte
 	PIN        string
 	Limits     auth.Limits
+
+	// elapsed is how far the fixture's clock has run ahead of real time.
+	// Every tap steps it past RepeatWindow, the way seconds pass at a till
+	// between one customer and the next; a test that wants two taps inside
+	// the window sets Svc.Now itself.
+	elapsed time.Duration
+}
+
+// later moves the fixture's clock past the repeat window.
+func (f *fixture) later() {
+	f.elapsed += RepeatWindow + time.Second
 }
 
 const testPIN = "1379"
@@ -170,11 +181,13 @@ func newFixture(t *testing.T, funded money.Amount) *fixture {
 		}
 	}
 
-	return &fixture{
+	f := &fixture{
 		Pool: pool, Cardholder: cardholder, Merchant: merchant, CardID: cardID,
 		UIDHash: uidHash, Token: tok, Anchor: anchor, PIN: testPIN, Limits: limits,
 		Svc: &Service{Pool: pool, Fee: BasisPointFee(50)},
 	}
+	f.Svc.Now = func() time.Time { return time.Now().Add(f.elapsed) }
+	return f
 }
 
 // cardholderAnswers is the client half of the PIN protocol.

@@ -23,6 +23,9 @@ type tapRecord struct {
 	Tier       auth.Tier
 	LedgerTx   uuid.UUID
 	Nonce      []byte
+	// At is the service's clock, not the database's: the same clock the
+	// daily window and the repeat window are judged by.
+	At time.Time
 }
 
 // recordTap writes the tap. It shares the caller's transaction with the ledger
@@ -32,10 +35,10 @@ func recordTap(ctx context.Context, tx pgx.Tx, r tapRecord) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO card_taps
 			(id, card_id, cardholder_id, merchant_id, currency,
-			 amount_minor, fee_minor, tier, ledger_tx_id, nonce)
-		VALUES ($1, $2, $3, $4, $5::currency, $6, $7, $8, $9, $10)`,
+			 amount_minor, fee_minor, tier, ledger_tx_id, nonce, created_at)
+		VALUES ($1, $2, $3, $4, $5::currency, $6, $7, $8, $9, $10, $11)`,
 		r.ID, r.CardID, r.Cardholder, r.Merchant, string(r.Amount.Currency()),
-		r.Amount.Minor(), r.Fee.Minor(), string(r.Tier), r.LedgerTx, r.Nonce)
+		r.Amount.Minor(), r.Fee.Minor(), string(r.Tier), r.LedgerTx, r.Nonce, r.At)
 	if err != nil {
 		return fmt.Errorf("tap: record tap: %w", err)
 	}

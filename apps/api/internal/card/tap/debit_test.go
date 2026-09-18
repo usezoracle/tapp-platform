@@ -20,6 +20,7 @@ import (
 // challenge asks for a tier and nonce the way a merchant app does.
 func (f *fixture) challenge(t *testing.T, amount money.Amount) *Challenge {
 	t.Helper()
+	f.later()
 	ch, err := f.Svc.Challenge(context.Background(), ChallengeRequest{
 		CardUIDHash: f.UIDHash, MerchantID: f.Merchant, Amount: amount,
 	})
@@ -444,5 +445,71 @@ func TestATapWithEnoughNairaBuysNothing(t *testing.T) {
 	}
 	if usd.Minor() != 1000 {
 		t.Errorf("dollar balance = %s, want $10.00 untouched", usd)
+	}
+}
+
+// A card left resting on the phone is read again the moment the till is
+// re-armed. The same amount from the same card at the same till inside
+// RepeatWindow is refused at the challenge and at the debit; a different
+// amount, or a moment later, goes through.
+func TestTheSameCardIsNotChargedTheSameAmountTwiceInAMoment(t *testing.T) {
+	f := newFixture(t, money.Naira(10_000))
+	amount := money.Naira(1_500)
+	ctx := context.Background()
+
+	// A challenge issued before the first tap posts: the race the debit
+	// guard exists for.
+	early := f.challenge(t, amount)
+
+	if _, err := f.pay(t, amount); err != nil {
+		t.Fatalf("first tap: %v", err)
+	}
+	at := f.elapsed
+
+	// Ten seconds later, the same again: refused before anything moves.
+	f.Svc.Now = func() time.Time { return time.Now().Add(at + 10*time.Second) }
+	_, err := f.Svc.Challenge(ctx, ChallengeRequest{CardUIDHash: f.UIDHash, MerchantID: f.Merchant, Amount: amount})
+	if !errors.Is(err, ErrRepeatTap) {
+		t.Fatalf("second challenge: err = %v, want ErrRepeatTap", err)
+	}
+
+	// The early challenge, presented now, is refused at the debit.
+	_, err = f.Svc.Debit(ctx, Request{
+		CardUIDHash: f.UIDHash, PresentedToken: f.Token, Nonce: early.Nonce,
+		MerchantID: f.Merchant, Amount: amount,
+	})
+	if !errors.Is(err, ErrRepeatTap) {
+		t.Fatalf("debit inside the window: err = %v, want ErrRepeatTap", err)
+	}
+	if got := f.balance(t); got.Minor() != 850_000 {
+		t.Errorf("cardholder = %s, want ₦8,500.00 (one tap, not two)", got)
+	}
+
+	// A different amount is a different purchase.
+	if _, err := f.Svc.Challenge(ctx, ChallengeRequest{CardUIDHash: f.UIDHash, MerchantID: f.Merchant, Amount: money.Naira(1_499)}); err != nil {
+		t.Errorf("a different amount inside the window: %v", err)
+	}
+
+	// Past the window it is a new payment.
+	f.Svc.Now = func() time.Time { return time.Now().Add(f.elapsed) }
+	if _, err := f.pay(t, amount); err != nil {
+		t.Fatalf("after the window: %v", err)
+	}
+}
+
+// A reversed tap does not block a retake: the merchant refunded it precisely
+// so that it could be taken again.
+func TestAReversedTapDoesNotBlockTheNextOne(t *testing.T) {
+	f := newFixture(t, money.Naira(10_000))
+	amount := money.Naira(1_500)
+	receipt, err := f.pay(t, amount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Svc.Reverse(context.Background(), f.Merchant, receipt.TapID, "wrong amount entered"); err != nil {
+		t.Fatalf("Reverse: %v", err)
+	}
+	if _, err := f.pay(t, amount); err != nil {
+		t.Fatalf("retake after reversal: %v", err)
 	}
 }

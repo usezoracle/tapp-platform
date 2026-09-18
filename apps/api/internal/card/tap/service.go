@@ -215,6 +215,9 @@ func (s *Service) Challenge(ctx context.Context, req ChallengeRequest) (*Challen
 		if err := k.usable(now); err != nil {
 			return err
 		}
+		if err := refuseRepeat(ctx, tx, k.ID, req.MerchantID, req.Amount, now); err != nil {
+			return err
+		}
 
 		tier, err := k.Limits.TierFor(req.Amount)
 		if err != nil {

@@ -81,6 +81,9 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 		if err := k.usable(now); err != nil {
 			return err
 		}
+		if err := refuseRepeat(ctx, tx, k.ID, req.MerchantID, req.Amount, now); err != nil {
+			return err
+		}
 
 		// 3. A mismatch is recorded and COMMITTED: the count is what
 		//    eventually locks a cloned card, and rolling it back would mean it
@@ -188,7 +191,7 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 		if err := recordTap(ctx, tx, tapRecord{
 			ID: tapID, CardID: k.ID, Cardholder: *k.Cardholder, Merchant: req.MerchantID,
 			Amount: req.Amount, Fee: fee, Tier: challenge.Tier,
-			LedgerTx: ledgerTx, Nonce: req.Nonce,
+			LedgerTx: ledgerTx, Nonce: req.Nonce, At: now,
 		}); err != nil {
 			return err
 		}
