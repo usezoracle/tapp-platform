@@ -25,9 +25,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="mx-auto flex h-12 w-full max-w-[880px] items-center gap-6 px-4">
           <Link href="/" className="focus-ring flex items-center gap-2 rounded-sm">
             <span aria-hidden className="grid size-5 place-items-center rounded-sm bg-primary text-[10px] font-semibold text-primary-fg">
-              T
+              F
             </span>
-            <span className="text-[13px] font-medium">Tapp Business</span>
+            <span className="text-[13px] font-medium">Freedom Exchange</span>
           </Link>
           {session ? (
             <nav className="flex items-center gap-1" aria-label="Main">

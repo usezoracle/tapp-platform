@@ -17,8 +17,8 @@ const bricolage = Bricolage_Grotesque({
 });
 
 export const metadata: Metadata = {
-  title: "Tapp Business",
-  description: "Register your business on Tapp and list it on Freedom Exchange.",
+  title: "Freedom Exchange",
+  description: "List your business on Freedom Exchange. Every card tap at your shop buys the customer a slice of it.",
 };
 
 export const viewport: Viewport = {

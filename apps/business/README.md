@@ -1,4 +1,4 @@
-# Tapp Business
+# Freedom Exchange — merchant portal
 
 The merchant-facing web portal: a business registers on Tapp and lists on
 Freedom Exchange. Next.js 16 (App Router), React 19, Tailwind v4, TanStack

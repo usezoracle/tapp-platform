@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Auth for Tapp Business.
+ * Auth for the Freedom Exchange merchant portal.
  *
  * Email and password only, on the merchant ("sender") scope. Registering
  * here creates the same account the Tapp merchant app signs into: the API
