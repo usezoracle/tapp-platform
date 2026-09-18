@@ -32,3 +32,46 @@ export const formatWholeShares = (n: number): string =>
 
 export const formatNaira = (naira: number): string =>
   `₦${naira.toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/* ------------------------------------------------------- exact valuation */
+
+/**
+ * "100000" or "100000.5" (naira, up to two places) -> kobo, exactly.
+ * Null when the text is not a price.
+ */
+export function koboFromText(naira: string): bigint | null {
+  const m = /^(\d+)(?:\.(\d{0,2}))?$/.exec(naira.trim().replace(/,/g, ""));
+  if (!m) return null;
+  const frac = (m[2] ?? "").padEnd(2, "0");
+  return BigInt(m[1]) * BigInt(100) + BigInt(frac);
+}
+
+/** "10000000" (whole shares) -> BigInt. Null when the text is not a whole number. */
+export function wholeFromText(shares: string): bigint | null {
+  const t = shares.trim().replace(/,/g, "");
+  return /^\d+$/.test(t) ? BigInt(t) : null;
+}
+
+/** Digits with thousands separators, no locale rounding: "1000000" -> "1,000,000". */
+export function groupDigits(digits: string): string {
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+/** Kobo -> "₦1,000,000" or "₦40.50" (decimals only when there are any). */
+export function formatKobo(kobo: bigint): string {
+  const hundred = BigInt(100);
+  const whole = groupDigits((kobo / hundred).toString());
+  const frac = Number(kobo % hundred);
+  return frac === 0 ? `₦${whole}` : `₦${whole}.${String(frac).padStart(2, "0")}`;
+}
+
+/**
+ * What the typed shares in issue are worth at the typed reference price,
+ * multiplied exactly on the integer values. Null until both are valid.
+ */
+export function valuationFromText(sharesInIssue: string, referencePrice: string): { shares: string; price: string; value: string } | null {
+  const shares = wholeFromText(sharesInIssue);
+  const kobo = koboFromText(referencePrice);
+  if (shares === null || kobo === null || kobo === BigInt(0)) return null;
+  return { shares: groupDigits(shares.toString()), price: formatKobo(kobo), value: formatKobo(shares * kobo) };
+}

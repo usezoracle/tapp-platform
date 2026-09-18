@@ -12,7 +12,7 @@ import { Stepper, Check } from "@/components/ui/Stepper";
 import { Button } from "@/components/ui/Button";
 import { TextField, SelectField } from "@/components/ui/Field";
 import { Declaration } from "@/components/ui/Declaration";
-import { KeyValueList } from "@/components/ui/KeyValue";
+import { KeyValueList, Stat } from "@/components/ui/KeyValue";
 import { Notice } from "@/components/ui/Notice";
 import { StatusChip, type ChipTone } from "@/components/ui/StatusChip";
 import { labelClasses, hintClasses, errorClasses, linkClasses, secondaryBtnClasses } from "@/components/ui/Styles";
@@ -20,7 +20,7 @@ import { Findings } from "@/components/business/Findings";
 import { ApiError, createBusiness, type Business, type Me } from "@/lib/api";
 import { businessKey, useBusiness, useMe } from "@/lib/queries";
 import { MCC_OPTIONS, mccLabel } from "@/lib/mcc";
-import { formatNaira, formatWholeShares } from "@/lib/units";
+import { formatNaira, formatWholeShares, valuationFromText } from "@/lib/units";
 import { maskRef } from "@/lib/utils";
 import {
   STEPS,
@@ -139,6 +139,10 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
   }, [tradingName, getValues, setValue]);
 
   const mcc = watch("mcc");
+  // Shares in issue × reference price, exact on the integer values, shown as the merchant types.
+  const sharesInIssue = watch("shares_in_issue");
+  const referencePrice = watch("reference_price");
+  const valuation = valuationFromText(sharesInIssue ?? "", referencePrice ?? "");
   // A whole-list problem (the total exceeds treasury) lands on `founders`
   // itself, alongside the per-row errors.
   const foundersError = errors.founders?.root?.message ?? (errors.founders as { message?: string } | undefined)?.message;
@@ -282,6 +286,17 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
             <TextField id="cofund_bps" label="Co-funding" inputMode="numeric" trailing="bps" hint="0 to 300. Each 100 bps adds 1% of every tap to the customer's shares, from you, instead of a cash discount." error={errors.cofund_bps?.message} {...register("cofund_bps")} />
           </div>
 
+          <p className="text-[13px] leading-relaxed text-fg-muted" aria-live="polite">
+            {valuation ? (
+              <>
+                At <span className="tabular-nums text-fg">{valuation.price}</span> per share, <span className="tabular-nums text-fg">{valuation.shares}</span> shares value the company at{" "}
+                <span className="tabular-nums font-medium text-fg">{valuation.value}</span>.
+              </>
+            ) : (
+              "Enter the shares in issue and a reference price to see what they value the company at."
+            )}
+          </p>
+
           <div className="grid gap-2">
             <div className="flex items-baseline justify-between">
               <p className={labelClasses}>Founders&apos; allocations</p>
@@ -355,6 +370,12 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
 
       {step === 3 ? (
         <section className="grid gap-4">
+          <div className="panel">
+            <div className="grid grid-cols-2 divide-x divide-line">
+              <Stat label="Share price" value={valuation?.price ?? "—"} sub="reference price at listing" />
+              <Stat label="Company value at listing" value={valuation?.value ?? "—"} sub={valuation ? `${valuation.shares} shares in issue × price` : "shares in issue × price"} />
+            </div>
+          </div>
           <div className="panel">
             <KeyValueList
               rows={[

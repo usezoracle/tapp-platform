@@ -20,11 +20,23 @@ export function CapTable({ live }: { live: CapTableShape }) {
       ) : null}
 
       <section className="panel">
-        <div className="grid grid-cols-2 divide-x divide-line sm:grid-cols-4">
+        <div className="grid grid-cols-2 divide-x divide-line sm:grid-cols-3">
+          <Stat label="Share price" value={live.price?.display ?? "—"} sub="at today's price" />
+          <Stat label="Company value" value={live.market_cap?.display ?? "—"} sub="shares in issue × price" />
+          <Stat label="Holders" value={formatInt(live.holders)} sub="on the register" />
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="grid grid-cols-2 divide-x divide-line sm:grid-cols-3">
           <Stat label="Authorised" value={formatShares(live.shares_authorised)} />
-          <Stat label="In issue" value={formatShares(live.in_issue)} />
+          <div>
+            <Stat label="In issue" value={formatShares(live.in_issue)} sub="declared by the company" />
+            <div className="border-t border-line">
+              <Stat label="On register" value={formatShares(live.on_register)} sub="held on the exchange" />
+            </div>
+          </div>
           <Stat label="Treasury remaining" value={formatShares(live.treasury_remaining)} />
-          <Stat label="Holders" value={formatInt(live.holders)} />
         </div>
         <div className="border-t border-line px-4 py-3">
           <div className="flex items-baseline justify-between gap-3 text-[13px]">

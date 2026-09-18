@@ -33,8 +33,15 @@ export interface LastSession {
 }
 
 export interface CapTable {
+  /** What one share is valued at today. */
+  price: Money;
+  /** Shares in issue at today's price: what the company is presently worth. */
+  market_cap: Money;
   shares_authorised: Quantity;
+  /** The company's declared shares in issue. */
   in_issue: Quantity;
+  /** The part of the shares in issue held on the exchange's register. */
+  on_register: Quantity;
   treasury_remaining: Quantity;
   released_today: Quantity;
   daily_release: Quantity;
