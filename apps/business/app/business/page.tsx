@@ -114,7 +114,28 @@ function BusinessRecord({ business: b }: { business: Business }) {
         <KeyValueList
           rows={[
             { k: "Symbol", v: <span className="font-medium">{b.symbol}</span> },
-            { k: "Reference price", v: b.reference_price.display },
+            {
+              k: "Fair value",
+              v: (
+                <>
+                  {b.fair_value?.display ?? "—"}
+                  {b.evidence?.net_assets && b.evidence?.revenue ? (
+                    <span className="block text-xs text-fg-subtle">
+                      net assets {b.evidence.net_assets.display} + revenue {b.evidence.revenue.display}
+                    </span>
+                  ) : null}
+                </>
+              ),
+            },
+            {
+              k: "Listing price (set by the exchange)",
+              v: (
+                <>
+                  {b.reference_price?.display ?? "—"}
+                  <span className="block text-xs text-fg-subtle">fair value ÷ shares in issue</span>
+                </>
+              ),
+            },
             { k: "Merchant category", v: mccLabel(b.mcc) },
             { k: "Instrument", v: b.instrument_id ?? "—" },
           ]}

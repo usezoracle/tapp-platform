@@ -14,8 +14,6 @@ export const MAX_SHARES = Math.floor(Number.MAX_SAFE_INTEGER / UNITS_PER_SHARE);
 
 export const sharesToUnits = (shares: number): number => Math.round(shares * UNITS_PER_SHARE);
 
-export const nairaToKobo = (naira: number): number => Math.round(naira * KOBO_PER_NAIRA);
-
 /** "0.203125" or "8000000" from the wire -> "0.203125" / "8,000,000". */
 export function formatShares(q: { shares: string; units: number } | null | undefined): string {
   if (!q) return "—";
@@ -29,9 +27,6 @@ export const formatInt = (n: number): string => n.toLocaleString("en-NG");
 /** A share count typed as whole shares, rendered with grouping. */
 export const formatWholeShares = (n: number): string =>
   Number.isFinite(n) ? n.toLocaleString("en-NG", { maximumFractionDigits: 0 }) : "—";
-
-export const formatNaira = (naira: number): string =>
-  `₦${naira.toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /* ------------------------------------------------------- exact valuation */
 
@@ -65,13 +60,47 @@ export function formatKobo(kobo: bigint): string {
   return frac === 0 ? `₦${whole}` : `₦${whole}.${String(frac).padStart(2, "0")}`;
 }
 
+/** The largest kobo figure that survives the trip through a JSON number exactly. */
+export const MAX_KOBO = BigInt(Number.MAX_SAFE_INTEGER);
+
+/** Kobo -> "100000.50" or "100000": the text a naira field holds for a wire amount. */
+export function nairaTextFromMinor(minor: number): string {
+  if (!Number.isFinite(minor) || minor < 0) return "";
+  const kobo = BigInt(Math.trunc(minor));
+  const hundred = BigInt(100);
+  const whole = (kobo / hundred).toString();
+  const frac = Number(kobo % hundred);
+  return frac === 0 ? whole : `${whole}.${String(frac).padStart(2, "0")}`;
+}
+
 /**
- * What the typed shares in issue are worth at the typed reference price,
- * multiplied exactly on the integer values. Null until both are valid.
+ * How the exchange prices a listing, computed exactly on kobo and whole
+ * shares so the form shows the same figures the exchange will set:
+ *
+ *   fair value    = net assets + revenue (trailing 12 months)
+ *   listing price = fair value ÷ shares in issue, rounded down to the kobo
+ *   company value = listing price × shares in issue (fair value less the rounding)
  */
-export function valuationFromText(sharesInIssue: string, referencePrice: string): { shares: string; price: string; value: string } | null {
+export interface Pricing {
+  fairValue: bigint;
+  listingPrice: bigint;
+  companyValue: bigint;
+  shares: bigint;
+}
+
+/** Net assets + revenue in kobo. Null until both are typed and more than zero. */
+export function fairValueFromText(netAssets: string, revenue: string): bigint | null {
+  const a = koboFromText(netAssets);
+  const r = koboFromText(revenue);
+  if (a === null || r === null || a <= BigInt(0) || r <= BigInt(0)) return null;
+  return a + r;
+}
+
+/** The exchange's pricing of the typed figures. Null until financials and shares in issue are valid. */
+export function pricingFromText(netAssets: string, revenue: string, sharesInIssue: string): Pricing | null {
+  const fairValue = fairValueFromText(netAssets, revenue);
   const shares = wholeFromText(sharesInIssue);
-  const kobo = koboFromText(referencePrice);
-  if (shares === null || kobo === null || kobo === BigInt(0)) return null;
-  return { shares: groupDigits(shares.toString()), price: formatKobo(kobo), value: formatKobo(shares * kobo) };
+  if (fairValue === null || shares === null || shares === BigInt(0)) return null;
+  const listingPrice = fairValue / shares;
+  return { fairValue, listingPrice, companyValue: listingPrice * shares, shares };
 }

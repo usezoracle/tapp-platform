@@ -20,7 +20,7 @@ import { Findings } from "@/components/business/Findings";
 import { ApiError, createBusiness, type Business, type Me } from "@/lib/api";
 import { businessKey, useBusiness, useMe } from "@/lib/queries";
 import { MCC_OPTIONS, mccLabel } from "@/lib/mcc";
-import { formatNaira, formatWholeShares, valuationFromText } from "@/lib/units";
+import { fairValueFromText, formatKobo, formatWholeShares, groupDigits, koboFromText, nairaTextFromMinor, pricingFromText } from "@/lib/units";
 import { maskRef } from "@/lib/utils";
 import {
   STEPS,
@@ -139,10 +139,13 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
   }, [tradingName, getValues, setValue]);
 
   const mcc = watch("mcc");
-  // Shares in issue × reference price, exact on the integer values, shown as the merchant types.
+  // The exchange's pricing, exact on the integer values, shown as the merchant types:
+  // fair value = net assets + revenue; listing price = fair value ÷ shares in issue.
   const sharesInIssue = watch("shares_in_issue");
-  const referencePrice = watch("reference_price");
-  const valuation = valuationFromText(sharesInIssue ?? "", referencePrice ?? "");
+  const netAssets = watch("net_assets");
+  const revenue = watch("revenue");
+  const fairValue = fairValueFromText(netAssets ?? "", revenue ?? "");
+  const pricing = pricingFromText(netAssets ?? "", revenue ?? "", sharesInIssue ?? "");
   // A whole-list problem (the total exceeds treasury) lands on `founders`
   // itself, alongside the per-row errors.
   const foundersError = errors.founders?.root?.message ?? (errors.founders as { message?: string } | undefined)?.message;
@@ -281,19 +284,25 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
             <TextField id="treasury_shares" label="Treasury pool" inputMode="numeric" hint="Shares set aside for customers to earn by tapping." error={errors.treasury_shares?.message} {...register("treasury_shares")} />
             <TextField id="public_shares" label="Public shares" inputMode="numeric" hint="The free float: shares not held by founders or insiders." error={errors.public_shares?.message} {...register("public_shares")} />
             <TextField id="holders_count" label="Holders today" inputMode="numeric" hint="How many people hold shares now." error={errors.holders_count?.message} {...register("holders_count")} />
-            <TextField id="reference_price" label="Reference price per share" inputMode="decimal" placeholder="40.00" trailing="NGN" hint="What one share is worth at listing, in naira." error={errors.reference_price?.message} {...register("reference_price")} />
             <TextField id="daily_release" label="Daily release cap" inputMode="numeric" hint="The most treasury shares that can go to customers in one day." error={errors.daily_release?.message} {...register("daily_release")} />
             <TextField id="cofund_bps" label="Co-funding" inputMode="numeric" trailing="bps" hint="0 to 300. Each 100 bps adds 1% of every tap to the customer's shares, from you, instead of a cash discount." error={errors.cofund_bps?.message} {...register("cofund_bps")} />
           </div>
 
           <p className="text-[13px] leading-relaxed text-fg-muted" aria-live="polite">
-            {valuation ? (
+            {pricing ? (
               <>
-                At <span className="tabular-nums text-fg">{valuation.price}</span> per share, <span className="tabular-nums text-fg">{valuation.shares}</span> shares value the company at{" "}
-                <span className="tabular-nums font-medium text-fg">{valuation.value}</span>.
+                A fair value of <span className="tabular-nums text-fg">{formatKobo(pricing.fairValue)}</span> over{" "}
+                <span className="tabular-nums text-fg">{groupDigits(pricing.shares.toString())}</span> shares sets the listing price at{" "}
+                <span className="tabular-nums font-medium text-fg">{formatKobo(pricing.listingPrice)}</span> per share, valuing the company at{" "}
+                <span className="tabular-nums font-medium text-fg">{formatKobo(pricing.companyValue)}</span>.
               </>
+            ) : fairValue === null ? (
+              "The exchange sets the share price from your financials. Enter your financials in the next step to see it."
             ) : (
-              "Enter the shares in issue and a reference price to see what they value the company at."
+              <>
+                Enter the shares in issue to see the listing price the exchange sets from your{" "}
+                <span className="tabular-nums text-fg">{formatKobo(fairValue)}</span> fair value.
+              </>
             )}
           </p>
 
@@ -358,6 +367,21 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
           <div className="max-w-[320px]">
             <TextField id="trading_months" label="Months trading" inputMode="numeric" hint="The standard is 24 months or more." error={errors.trading_months?.message} {...register("trading_months")} />
           </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <TextField id="net_assets" label="Net assets (₦)" inputMode="decimal" placeholder="25000000" hint="From your audited accounts" error={errors.net_assets?.message} {...register("net_assets")} />
+            <TextField id="revenue" label="Revenue, last 12 months (₦)" inputMode="decimal" placeholder="60000000" hint="From your audited accounts" error={errors.revenue?.message} {...register("revenue")} />
+          </div>
+          <div className="panel" aria-live="polite">
+            <div className="grid grid-cols-2 divide-x divide-line">
+              <Stat label="Fair value" value={fairValue !== null ? formatKobo(fairValue) : "—"} sub="net assets + revenue" />
+              <Stat
+                label="Listing price"
+                value={pricing ? formatKobo(pricing.listingPrice) : "—"}
+                sub={pricing ? `fair value ÷ ${groupDigits(pricing.shares.toString())} shares in issue` : fairValue !== null ? "needs the shares in issue from the Shares step" : "fair value ÷ shares in issue"}
+              />
+            </div>
+            <p className="border-t border-line px-4 py-2.5 text-xs text-fg-subtle">The exchange sets this price. You do not choose it.</p>
+          </div>
           <div className="panel divide-y divide-line">
             <Declaration id="audited_accounts" statement="Our accounts are audited." rule="Rule: at least one set of audited financial statements." {...register("audited_accounts")} />
             <Declaration id="auditor_on_list" statement="Our auditor is on the SEC register." rule="Rule: the audit firm appears on the SEC's list of approved auditors." {...register("auditor_on_list")} />
@@ -371,9 +395,10 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
       {step === 3 ? (
         <section className="grid gap-4">
           <div className="panel">
-            <div className="grid grid-cols-2 divide-x divide-line">
-              <Stat label="Share price" value={valuation?.price ?? "—"} sub="reference price at listing" />
-              <Stat label="Company value at listing" value={valuation?.value ?? "—"} sub={valuation ? `${valuation.shares} shares in issue × price` : "shares in issue × price"} />
+            <div className="grid divide-y divide-line sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+              <Stat label="Fair value" value={pricing ? formatKobo(pricing.fairValue) : "—"} sub="net assets + revenue" />
+              <Stat label="Listing price" value={pricing ? formatKobo(pricing.listingPrice) : "—"} sub="set by the exchange: fair value ÷ shares in issue" />
+              <Stat label="Company value at listing" value={pricing ? formatKobo(pricing.companyValue) : "—"} sub={pricing ? `${groupDigits(pricing.shares.toString())} shares in issue × listing price` : "shares in issue × listing price"} />
             </div>
           </div>
           <div className="panel">
@@ -389,7 +414,6 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
                 { k: "Treasury pool", v: formatWholeShares(Number(v.treasury_shares)) },
                 { k: "Public shares", v: formatWholeShares(Number(v.public_shares)) },
                 { k: "Holders today", v: v.holders_count },
-                { k: "Reference price", v: formatNaira(Number(v.reference_price)) },
                 { k: "Daily release cap", v: `${formatWholeShares(Number(v.daily_release))} shares` },
                 { k: "Co-funding", v: `${v.cofund_bps} bps (${(Number(v.cofund_bps) / 100).toFixed(2)}%)` },
                 {
@@ -408,6 +432,8 @@ function ListingForm({ token, me, previous }: { token: string; me: Me; previous:
                     ),
                 },
                 { k: "Months trading", v: v.trading_months },
+                { k: "Net assets", v: naira(v.net_assets) },
+                { k: "Revenue, last 12 months", v: naira(v.revenue) },
                 { k: "Audited accounts", v: yesNo(v.audited_accounts) },
                 { k: "Auditor on SEC list", v: yesNo(v.auditor_on_list) },
                 { k: "Board resolution", v: yesNo(v.board_resolution) },
@@ -449,6 +475,12 @@ function yesNo(b: boolean) {
   return b ? "Yes" : "No";
 }
 
+/** A typed naira figure, grouped; the raw text if it is not one yet. */
+function naira(text: string) {
+  const kobo = koboFromText(text);
+  return kobo === null ? text || "—" : formatKobo(kobo);
+}
+
 /** Starting values: a rejected record's identity, plus the owner's founder row. */
 function seedFrom(previous: Business | null | undefined, me: Me): ListingInput {
   return {
@@ -459,7 +491,8 @@ function seedFrom(previous: Business | null | undefined, me: Me): ListingInput {
     mcc: previous ? (MCC_OPTIONS.some((o) => o.code === previous.mcc) ? previous.mcc : "other") : "",
     mcc_other: previous && !MCC_OPTIONS.some((o) => o.code === previous.mcc) ? previous.mcc : "",
     symbol: previous?.symbol ?? "",
-    reference_price: previous ? (previous.reference_price.minor / 100).toFixed(2) : "",
+    net_assets: previous?.evidence?.net_assets ? nairaTextFromMinor(previous.evidence.net_assets.minor) : "",
+    revenue: previous?.evidence?.revenue ? nairaTextFromMinor(previous.evidence.revenue.minor) : "",
     founders: [{ label: "You (owner)", shares: "", cardholder_ref: me.id, owner: true }],
   };
 }

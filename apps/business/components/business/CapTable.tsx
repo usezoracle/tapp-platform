@@ -66,7 +66,7 @@ export function CapTable({ live }: { live: CapTableShape }) {
 
       <section className="panel">
         <div className="grid grid-cols-2 divide-x divide-line sm:grid-cols-3">
-          <Stat label="Reference price" value={live.reference_price?.display ?? "—"} />
+          <Stat label="Listing price" value={live.reference_price?.display ?? "—"} sub="set by the exchange" />
           {live.last_session ? (
             <>
               <Stat label="Last session" value={live.last_session.price?.display ?? "—"} sub={`${formatDate(live.last_session.date)} · ${live.last_session.state}`} />

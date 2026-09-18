@@ -12,6 +12,12 @@ export interface Money {
   display: string;
 }
 
+/** Money as the API is sent it: kobo and the currency, no display string. */
+export interface MoneyMinor {
+  minor: number;
+  currency: "NGN";
+}
+
 export interface Quantity {
   units: number;
   shares: string;
@@ -49,6 +55,7 @@ export interface CapTable {
   top_holders: { cardholder_ref: string; units: number; shares: string }[];
   pending_funding: Money;
   escrowed_funding: Money;
+  /** The listing price the exchange set from the audited financials. */
   reference_price: Money | null;
   last_session: LastSession | null;
   halted: boolean;
@@ -65,6 +72,11 @@ export interface Business {
   state: BusinessState;
   findings: Finding[];
   instrument_id: string | null;
+  /** The audited figures the listing was priced from. */
+  evidence: { net_assets: Money; revenue: Money };
+  /** Net assets + revenue (trailing 12 months). */
+  fair_value: Money;
+  /** The listing price the exchange set: fair value ÷ shares in issue, rounded down to the kobo. */
   reference_price: Money;
   submitted_at: string;
   decided_at: string | null;
@@ -82,6 +94,10 @@ export interface Evidence {
   treasury_units: number;
   board_resolution: boolean;
   directors_clear: boolean;
+  /** From the audited accounts. The exchange prices the listing from these two. */
+  net_assets: MoneyMinor;
+  /** Trailing 12 months. */
+  revenue: MoneyMinor;
 }
 
 export interface HolderAllocation {
@@ -97,7 +113,6 @@ export interface BusinessRequest {
   mcc: string;
   symbol: string;
   evidence: Evidence;
-  reference_price: { minor: number; currency: "NGN" };
   shares_authorised_units: number;
   daily_release_units: number;
   cofund_bps: number;

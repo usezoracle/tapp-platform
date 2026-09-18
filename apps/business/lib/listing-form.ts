@@ -6,7 +6,7 @@
 
 import { z } from "zod";
 import type { BusinessRequest } from "./api";
-import { MAX_SHARES, nairaToKobo, sharesToUnits } from "./units";
+import { MAX_KOBO, MAX_SHARES, koboFromText, sharesToUnits } from "./units";
 
 export const STEPS = ["Legal identity", "Shares", "Evidence", "Review"] as const;
 
@@ -30,6 +30,17 @@ const wholeShares = (what: string) =>
 const wholeCount = (what: string) =>
   cleaned.pipe(z.string().min(1, `Enter ${what}`).regex(/^\d+$/, "A whole number"));
 
+/** A naira figure typed as text: whole naira, up to two places of kobo, more than zero. */
+const nairaAmount = (what: string) =>
+  cleaned.pipe(
+    z
+      .string()
+      .min(1, `Enter ${what}`)
+      .regex(/^\d+(\.\d{1,2})?$/, "Naira, up to two decimal places")
+      .refine((s) => (koboFromText(s) ?? BigInt(0)) > BigInt(0), "Must be more than zero")
+      .refine((s) => (koboFromText(s) ?? BigInt(0)) <= MAX_KOBO, "Too large to submit"),
+  );
+
 export const listingSchema = z
   .object({
     legal_name: z.string().trim().min(1, "The registered name of the company"),
@@ -52,13 +63,6 @@ export const listingSchema = z
     treasury_shares: wholeShares("the treasury pool"),
     public_shares: wholeShares("the public shares"),
     holders_count: wholeCount("how many holders there are"),
-    reference_price: cleaned.pipe(
-      z
-        .string()
-        .min(1, "Enter a price per share")
-        .regex(/^\d+(\.\d{1,2})?$/, "Naira, up to two decimal places")
-        .refine((s) => Number(s) > 0, "Must be more than zero"),
-    ),
     daily_release: wholeShares("the daily release cap"),
     cofund_bps: cleaned.pipe(
       z
@@ -81,6 +85,8 @@ export const listingSchema = z
     ),
 
     trading_months: wholeCount("how many months you have traded"),
+    net_assets: nairaAmount("your net assets"),
+    revenue: nairaAmount("your revenue for the last 12 months"),
     audited_accounts: z.boolean(),
     auditor_on_list: z.boolean(),
     board_resolution: z.boolean(),
@@ -121,11 +127,12 @@ export const emptyListing: ListingInput = {
   treasury_shares: "",
   public_shares: "",
   holders_count: "",
-  reference_price: "",
   daily_release: "",
   cofund_bps: "0",
   founders: [],
   trading_months: "",
+  net_assets: "",
+  revenue: "",
   audited_accounts: false,
   auditor_on_list: false,
   board_resolution: false,
@@ -135,8 +142,8 @@ export const emptyListing: ListingInput = {
 /** Which fields each step owns, for per-step validation and error routing. */
 export const STEP_FIELDS: (keyof ListingInput)[][] = [
   ["legal_name", "trading_name", "rc_number", "mcc", "mcc_other", "symbol"],
-  ["shares_in_issue", "shares_authorised", "treasury_shares", "public_shares", "holders_count", "reference_price", "daily_release", "cofund_bps", "founders"],
-  ["trading_months", "audited_accounts", "auditor_on_list", "board_resolution", "directors_clear"],
+  ["shares_in_issue", "shares_authorised", "treasury_shares", "public_shares", "holders_count", "daily_release", "cofund_bps", "founders"],
+  ["trading_months", "net_assets", "revenue", "audited_accounts", "auditor_on_list", "board_resolution", "directors_clear"],
   [],
 ];
 
@@ -153,7 +160,8 @@ export function serverFieldToForm(field: string): string | null {
     "evidence.public_shares": "public_shares",
     "evidence.holders": "holders_count",
     "evidence.treasury_units": "treasury_shares",
-    reference_price: "reference_price",
+    "evidence.net_assets": "net_assets",
+    "evidence.revenue": "revenue",
     shares_authorised_units: "shares_authorised",
     daily_release_units: "daily_release",
     cofund_bps: "cofund_bps",
@@ -170,7 +178,10 @@ export function stepOfField(formField: string): number {
   return i === -1 ? 0 : i;
 }
 
-/** Form -> wire. */
+/** "100000.50" -> 10000050. The schema has already bounded it to a safe integer. */
+const minorFromText = (naira: string) => Number(koboFromText(naira) ?? BigInt(0));
+
+/** Form -> wire. The exchange sets the price, so no price is sent. */
 export function toRequest(v: ListingOutput): BusinessRequest {
   return {
     legal_name: v.legal_name,
@@ -188,8 +199,9 @@ export function toRequest(v: ListingOutput): BusinessRequest {
       treasury_units: sharesToUnits(Number(v.treasury_shares)),
       board_resolution: v.board_resolution,
       directors_clear: v.directors_clear,
+      net_assets: { minor: minorFromText(v.net_assets), currency: "NGN" },
+      revenue: { minor: minorFromText(v.revenue), currency: "NGN" },
     },
-    reference_price: { minor: nairaToKobo(Number(v.reference_price)), currency: "NGN" },
     shares_authorised_units: sharesToUnits(Number(v.shares_authorised)),
     daily_release_units: sharesToUnits(Number(v.daily_release)),
     cofund_bps: Number(v.cofund_bps),
@@ -209,21 +221,41 @@ export function suggestSymbol(tradingName: string): string {
 
 /* ------------------------------------------------------------------ draft */
 
-const DRAFT_KEY = "tapp.business.draft.v1";
+/**
+ * v1 drafts carried a `reference_price` the merchant typed. The exchange now
+ * sets the price, so v2 drops that field and adds the financials. A v1 draft
+ * is read once, migrated (known fields kept, the rest discarded) and
+ * rewritten under the v2 key.
+ */
+const DRAFT_KEY = "tapp.business.draft.v2";
+const LEGACY_DRAFT_KEYS = ["tapp.business.draft.v1"];
 
 export interface Draft {
   values: ListingInput;
   step: number;
 }
 
+/** Only the fields the form knows, each starting from its empty value. */
+function migrateValues(stored: Partial<Record<string, unknown>>): ListingInput {
+  const values = { ...emptyListing } as Record<string, unknown>;
+  for (const key of Object.keys(emptyListing)) {
+    if (key in stored && stored[key] !== undefined) values[key] = stored[key];
+  }
+  return values as unknown as ListingInput;
+}
+
 export function readDraft(): Draft | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(DRAFT_KEY);
+    let raw: string | null = null;
+    for (const key of [DRAFT_KEY, ...LEGACY_DRAFT_KEYS]) {
+      raw = window.localStorage.getItem(key);
+      if (raw) break;
+    }
     if (!raw) return null;
-    const d = JSON.parse(raw) as Partial<Draft>;
+    const d = JSON.parse(raw) as { values?: Partial<Record<string, unknown>>; step?: number };
     if (!d.values) return null;
-    return { values: { ...emptyListing, ...d.values }, step: Math.min(Math.max(d.step ?? 0, 0), STEPS.length - 1) };
+    return { values: migrateValues(d.values), step: Math.min(Math.max(d.step ?? 0, 0), STEPS.length - 1) };
   } catch {
     return null;
   }
@@ -233,6 +265,7 @@ export function writeDraft(d: Draft): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+    for (const key of LEGACY_DRAFT_KEYS) window.localStorage.removeItem(key);
   } catch {
     // Storage full or blocked: the form still works, it just will not survive a reload.
   }
@@ -240,5 +273,5 @@ export function writeDraft(d: Draft): void {
 
 export function clearDraft(): void {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(DRAFT_KEY);
+  for (const key of [DRAFT_KEY, ...LEGACY_DRAFT_KEYS]) window.localStorage.removeItem(key);
 }
