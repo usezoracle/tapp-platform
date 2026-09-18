@@ -3,13 +3,13 @@
 import { use, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { PiArrowClockwiseBold } from "react-icons/pi";
-import { Screen, SectionHeader } from "@/components/ui/Screen";
+import { Screen, Section, StatRow } from "@/components/ui/Screen";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { InfoBanner } from "@/components/ui/InfoBanner";
 import { Button } from "@/components/ui/Button";
 import { StatusChip } from "@/components/ui/StatusChip";
 import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
-import { listClasses } from "@/components/ui/Styles";
+import { listClasses, stackClasses } from "@/components/ui/Styles";
 import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
 import { PriceChart } from "@/components/holdings/PriceChart";
 import { SymbolTile } from "@/components/holdings/SymbolTile";
@@ -56,7 +56,7 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
 
   return (
     <Screen>
-      <AnimatedComponent variant={slideInOut} className="grid gap-6 py-4">
+      <AnimatedComponent variant={slideInOut} className={cn(stackClasses, "py-4")}>
         <PageHeader
           title={h?.trading_name ?? symbol}
           back="/holdings"
@@ -99,28 +99,36 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
           )
         ) : h ? (
           <>
-            {/* Value / cost / change */}
-            <div className="grid gap-1">
-              <p className="eyebrow">Value</p>
-              <p className="display text-[32px] leading-9">{h.value.display}</p>
-              <p className="flex items-center gap-2 text-[13px] tabular-nums text-fg-muted">
-                <span className={cn("font-medium", changeClass(h.change_bps))}>
-                  {formatBps(h.change_bps)}
-                </span>
-                <span>· Cost {h.cost.display}</span>
-              </p>
-            </div>
+            {/* From 1024px the value and its figures sit beside the chart;
+                the lots and anything still in flight run full width below. */}
+            <div className="grid gap-6 md:gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-x-12">
+              <Section title="Value" description="At the last session price.">
+                <div className="grid gap-1">
+                  <p className="display text-[32px] leading-9">{h.value.display}</p>
+                  <p className="flex items-center gap-2 text-[13px] tabular-nums text-fg-muted">
+                    <span className={cn("font-medium", changeClass(h.change_bps))}>
+                      {formatBps(h.change_bps)}
+                    </span>
+                    <span>· Cost {h.cost.display}</span>
+                  </p>
+                </div>
+                <StatRow
+                  className="border-t border-line pt-3"
+                  stats={[
+                    { label: "Shares", value: formatShares(h.holding.shares) },
+                    { label: "Sellable", value: formatShares(h.sellable.shares) },
+                    {
+                      label: "Locked",
+                      value: formatShares(h.locked.shares),
+                      sub: lockedShares > 0 && h.next_unlock ? `Next ${formatDate(h.next_unlock)}` : undefined,
+                    },
+                  ]}
+                />
+              </Section>
 
-            <dl className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-line bg-line">
-              <Stat label="Shares" value={formatShares(h.holding.shares)} />
-              <Stat label="Sellable" value={formatShares(h.sellable.shares)} />
-              <Stat label="Locked" value={formatShares(h.locked.shares)} />
-            </dl>
-
-            {/* Chart */}
-            <section className="grid gap-3">
-              <SectionHeader
-                title="Adjusted price · 90 sessions"
+              <Section
+                title="Price"
+                description="Adjusted price over the last 90 sessions."
                 action={
                   h.last_session ? (
                     <span className="text-xs tabular-nums text-fg-muted">
@@ -128,36 +136,15 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
                     </span>
                   ) : null
                 }
-              />
-              <PriceChart prices={h.prices} currency={h.value.currency} />
-            </section>
+              >
+                <PriceChart prices={h.prices} currency={h.value.currency} />
+              </Section>
+            </div>
 
-            {/* Pending / escrowed */}
-            {pendingItems.length > 0 ? (
-              <section className="grid gap-3">
-                <SectionHeader title="Not yet allocated" />
-                <div className={listClasses}>
-                  {pendingItems.map((item) => (
-                    <PendingRow key={item.tap_id} item={item} />
-                  ))}
-                </div>
-                <p className="text-xs leading-5 text-fg-subtle">
-                  Queued and pending allocations are waiting for the exchange to settle.
-                  Escrowed ones are held until the tap clears.
-                </p>
-              </section>
-            ) : null}
-
-            {/* Lots */}
-            <section className="grid gap-3">
-              <SectionHeader
-                title={`${h.lots.length} ${h.lots.length === 1 ? "lot" : "lots"}`}
-                action={
-                  lockedShares > 0 && h.next_unlock ? (
-                    <span className="text-xs text-fg-muted">Next unlock {formatDate(h.next_unlock)}</span>
-                  ) : null
-                }
-              />
+            <Section
+              title="Lots"
+              description={`${h.lots.length} ${h.lots.length === 1 ? "lot" : "lots"} · each locked for 120 days from the tap that earned it, then sellable.`}
+            >
               {h.lots.length === 0 ? (
                 <div className="panel px-4 py-5 text-[13px] leading-5 text-fg-muted">No lots yet.</div>
               ) : (
@@ -167,46 +154,54 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
                     return (
                       <div
                         key={`${lot.tap_id ?? "lot"}-${lot.acquired_at}-${lot.shares}`}
-                        className="flex min-h-12 items-center gap-3 px-3 py-2"
+                        className="flex min-h-12 items-center gap-3 px-3 py-2 md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] md:gap-4"
                       >
                         <div className="grid min-w-0 flex-1 gap-0.5">
                           <p className="text-sm font-medium tabular-nums text-fg">
                             {sharesLabel(lot.shares)}
                           </p>
-                          <p className="truncate text-xs text-fg-muted">
+                          <p className="truncate text-xs tabular-nums text-fg-muted md:hidden">
                             Earned {formatDate(lot.acquired_at)} · {lot.cost.display}
                           </p>
                         </div>
-                        {unlocked ? (
-                          <StatusChip tone="success">Sellable</StatusChip>
-                        ) : (
-                          <span className="text-xs tabular-nums text-fg-muted">
-                            unlocks {formatDate(lot.transferable_from)}
-                          </span>
-                        )}
+                        <p className="hidden text-xs tabular-nums text-fg-muted md:block">
+                          Earned {formatDate(lot.acquired_at)}
+                        </p>
+                        <p className="hidden text-right text-sm tabular-nums text-fg md:block">
+                          {lot.cost.display}
+                        </p>
+                        <div className="flex justify-end md:min-w-28">
+                          {unlocked ? (
+                            <StatusChip tone="success">Sellable</StatusChip>
+                          ) : (
+                            <span className="text-xs tabular-nums text-fg-muted">
+                              unlocks {formatDate(lot.transferable_from)}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
               )}
-              <p className="text-xs leading-5 text-fg-subtle">
-                Shares earned from a tap are locked for 120 days from that tap, then you can
-                sell them.
-              </p>
-            </section>
+            </Section>
+
+            {pendingItems.length > 0 ? (
+              <Section
+                title="Pending"
+                description="Shares on their way. Queued and pending allocations wait for the exchange to settle; escrowed ones are held until the tap clears."
+              >
+                <div className={listClasses}>
+                  {pendingItems.map((item) => (
+                    <PendingRow key={item.tap_id} item={item} />
+                  ))}
+                </div>
+              </Section>
+            ) : null}
           </>
         ) : null}
       </AnimatedComponent>
     </Screen>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="grid gap-0.5 bg-raised px-3 py-2.5">
-      <dt className="text-xs text-fg-muted">{label}</dt>
-      <dd className="text-sm font-medium tabular-nums text-fg">{value}</dd>
-    </div>
   );
 }
 

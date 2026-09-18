@@ -14,11 +14,14 @@ import {
   PiCopyBold,
   PiCheckBold,
   PiChartLineUpBold,
+  PiEnvelopeSimpleBold,
+  PiWalletBold,
+  PiGlobeSimpleBold,
 } from "react-icons/pi";
-import { Screen, SectionHeader } from "@/components/ui/Screen";
+import { Screen, Section } from "@/components/ui/Screen";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusChip } from "@/components/ui/StatusChip";
-import { listClasses, rowClasses, tileClasses } from "@/components/ui/Styles";
+import { listClasses, rowClasses, stackClasses, tileClasses } from "@/components/ui/Styles";
 import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
 import { KycTierChip } from "@/components/ui/KycTierChip";
 import { Web3Avatar } from "@/components/ui/Web3Avatar";
@@ -26,6 +29,11 @@ import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import { useCard, useDepositAddress, useKycStatus } from "@/lib/ledger";
 
+/**
+ * Settings, as six titled sections: Account, Card, Security, Limits, Your
+ * shares, About. From 768px they fall into two columns; on the phone they
+ * stack in the same order.
+ */
 export default function SettingsPage() {
   const router = useRouter();
   const { hydrated, session, clear } = useSession();
@@ -58,7 +66,7 @@ export default function SettingsPage() {
 
   return (
     <Screen>
-      <AnimatedComponent variant={slideInOut} className="grid gap-6 py-4">
+      <AnimatedComponent variant={slideInOut} className={cn(stackClasses, "py-4")}>
         <PageHeader
           title="Settings"
           back="/"
@@ -66,129 +74,157 @@ export default function SettingsPage() {
           trailing={<Web3Avatar address={session.email} size={32} />}
         />
 
-        <section className="grid gap-3">
-          <SectionHeader title="Card" />
-          <div className={listClasses}>
-            <SettingsRow
-              href="/settings/card"
-              icon={<PiCreditCardBold />}
-              title="Tapp Card"
-              subtitle={card.data ? "Manage your physical card" : "Link a card to tap and pay"}
-              trailing={
-                card.data ? (
-                  <StatusChip tone="success">Linked</StatusChip>
-                ) : (
-                  <StatusChip>None</StatusChip>
-                )
-              }
-            />
-            {card.data && (
+        <div className={cn(stackClasses, "md:grid-cols-2 md:gap-x-12")}>
+          <Section title="Account" description="Who you are signed in as, and how verified you are.">
+            <div className={listClasses}>
               <SettingsRow
-                href="/settings/limits"
-                icon={<PiSlidersHorizontalBold />}
-                title="Spend limits"
-                subtitle="Daily, per tap, step-up threshold"
+                icon={<PiEnvelopeSimpleBold />}
+                title={session.email}
+                subtitle="Signed in"
               />
-            )}
-          </div>
-        </section>
-
-        <section className="grid gap-3">
-          <SectionHeader title="Account" />
-          <div className={listClasses}>
-            <SettingsRow
-              href="/holdings"
-              icon={<PiChartLineUpBold />}
-              title="Your shares"
-              subtitle="Businesses you own a slice of"
-            />
-            <SettingsRow
-              href="/settings/kyc"
-              icon={<PiIdentificationCardBold />}
-              title="Identity verification"
-              subtitle={
-                kyc.data?.next
-                  ? `Next: ${kyc.data.next.tier_name}`
-                  : kyc.data
-                    ? "Fully verified"
-                    : kyc.isError
-                      ? "Not available on this deployment"
-                      : "BVN and photo, raises your limits"
-              }
-              trailing={kyc.data ? <KycTierChip status={kyc.data} /> : <StatusChip>—</StatusChip>}
-            />
-            <SettingsRow
-              href="/settings/security"
-              icon={<PiLockKeyBold />}
-              title="Security"
-              subtitle="PIN, sign-out"
-            />
-          </div>
-        </section>
-
-        <section className="grid gap-3">
-          <SectionHeader
-            title="Deposit address"
-            action={
-              deposit.data ? (
+              <SettingsRow
+                href="/settings/kyc"
+                icon={<PiIdentificationCardBold />}
+                title="Identity verification"
+                subtitle={
+                  kyc.data?.next
+                    ? `Next: ${kyc.data.next.tier_name}`
+                    : kyc.data
+                      ? "Fully verified"
+                      : kyc.isError
+                        ? "Not available on this deployment"
+                        : "BVN and photo, raises your limits"
+                }
+                trailing={kyc.data ? <KycTierChip status={kyc.data} /> : <StatusChip>—</StatusChip>}
+              />
+              <SettingsRow
+                icon={<PiWalletBold />}
+                title="Deposit address"
+                subtitle={
+                  deposit.data
+                    ? `USDC on ${deposit.data.network}`
+                    : deposit.isError
+                      ? "Could not load your address"
+                      : "Loading"
+                }
+                trailing={
+                  deposit.data ? (
+                    <button
+                      type="button"
+                      onClick={copyToClipboard}
+                      className={cn(
+                        "focus-ring inline-flex h-7 items-center gap-1 rounded-sm px-1.5 text-xs font-medium transition-colors [&>svg]:size-3.5",
+                        copied ? "text-positive" : "text-accent hover:bg-hover",
+                      )}
+                    >
+                      {copied ? <PiCheckBold /> : <PiCopyBold />}
+                      {copied ? "Copied" : "Copy"}
+                    </button>
+                  ) : undefined
+                }
+              />
+              {deposit.data ? (
                 <button
                   type="button"
                   onClick={copyToClipboard}
-                  className={cn(
-                    "focus-ring inline-flex items-center gap-1 rounded-sm text-xs font-medium transition-colors [&>svg]:size-3.5",
-                    copied ? "text-positive" : "text-accent hover:underline",
-                  )}
+                  title="Copy address"
+                  className="focus-ring block w-full break-all px-3 py-2.5 text-left font-mono text-xs leading-5 text-fg transition-colors hover:bg-hover"
                 >
-                  {copied ? <PiCheckBold /> : <PiCopyBold />}
-                  {copied ? "Copied" : "Copy"}
+                  {displayAddress}
                 </button>
-              ) : null
-            }
-          />
-          <div className="panel grid gap-1.5 p-3">
-            <button
-              type="button"
-              onClick={copyToClipboard}
-              title="Copy address"
-              className="focus-ring break-all rounded-sm text-left font-mono text-xs leading-5 text-fg"
-            >
-              {displayAddress || "—"}
-            </button>
-            <p className="text-xs text-fg-muted">
-              {deposit.data
-                ? `USDC on ${deposit.data.network}`
-                : deposit.isError
-                  ? "Could not load your address"
-                  : "Loading"}
-            </p>
-          </div>
-        </section>
+              ) : null}
+            </div>
+          </Section>
 
-        <section className="grid gap-3">
-          <SectionHeader title="Support" />
-          <div className={listClasses}>
-            <SettingsRow
-              href="mailto:labs@zoracle.xyz"
-              icon={<PiQuestionBold />}
-              title="Help and support"
-              subtitle="labs@zoracle.xyz"
-              external
-            />
-            <button
-              type="button"
-              onClick={clear}
-              className={cn(rowClasses, "focus-ring w-full text-left")}
-            >
-              <span className={cn(tileClasses, "text-negative")}>
-                <PiSignOutBold />
-              </span>
-              <span className="grid flex-1 gap-0.5">
-                <span className="text-sm font-medium text-negative-fg">Sign out</span>
-                <span className="text-xs text-fg-muted">Sign back in to restore access.</span>
-              </span>
-            </button>
-          </div>
-        </section>
+          <Section title="Card" description="The physical card that spends from this balance.">
+            <div className={listClasses}>
+              <SettingsRow
+                href="/settings/card"
+                icon={<PiCreditCardBold />}
+                title="Tapp Card"
+                subtitle={card.data ? "Manage your physical card" : "Link a card to tap and pay"}
+                trailing={
+                  card.data ? (
+                    <StatusChip tone="success">Linked</StatusChip>
+                  ) : (
+                    <StatusChip>None</StatusChip>
+                  )
+                }
+              />
+            </div>
+          </Section>
+
+          <Section title="Security" description="Your PIN, and the way out.">
+            <div className={listClasses}>
+              <SettingsRow
+                href="/settings/security"
+                icon={<PiLockKeyBold />}
+                title="PIN"
+                subtitle="Change the PIN your card asks for"
+              />
+              <button
+                type="button"
+                onClick={clear}
+                className={cn(rowClasses, "focus-ring w-full text-left")}
+              >
+                <span className={cn(tileClasses, "text-negative")}>
+                  <PiSignOutBold />
+                </span>
+                <span className="grid flex-1 gap-0.5">
+                  <span className="text-sm font-medium text-negative-fg">Sign out</span>
+                  <span className="text-xs text-fg-muted">Sign back in to restore access.</span>
+                </span>
+              </button>
+            </div>
+          </Section>
+
+          <Section title="Limits" description="Caps that stop the card before your balance does.">
+            <div className={listClasses}>
+              {card.data ? (
+                <SettingsRow
+                  href="/settings/limits"
+                  icon={<PiSlidersHorizontalBold />}
+                  title="Spend limits"
+                  subtitle="Daily, per tap, step-up threshold"
+                />
+              ) : (
+                <SettingsRow
+                  icon={<PiSlidersHorizontalBold />}
+                  title="Spend limits"
+                  subtitle="Link a card to set them"
+                />
+              )}
+            </div>
+          </Section>
+
+          <Section title="Your shares" description="Businesses you own a slice of, earned one tap at a time.">
+            <div className={listClasses}>
+              <SettingsRow
+                href="/holdings"
+                icon={<PiChartLineUpBold />}
+                title="Holdings"
+                subtitle="Value, lots and unlock dates"
+              />
+            </div>
+          </Section>
+
+          <Section title="About" description="Help, and the network this wallet settles on.">
+            <div className={listClasses}>
+              <SettingsRow
+                href="mailto:labs@zoracle.xyz"
+                icon={<PiQuestionBold />}
+                title="Help and support"
+                subtitle="labs@zoracle.xyz"
+                external
+              />
+              <SettingsRow
+                icon={<PiGlobeSimpleBold />}
+                title="Network"
+                subtitle={deposit.data ? `USDC on ${deposit.data.network}` : "USDC on Base"}
+              />
+            </div>
+          </Section>
+        </div>
       </AnimatedComponent>
     </Screen>
   );
@@ -202,7 +238,8 @@ function SettingsRow({
   trailing,
   external,
 }: {
-  href: string;
+  /** Without one the row is a plain fact, not a link. */
+  href?: string;
   icon: React.ReactNode;
   title: React.ReactNode;
   subtitle?: React.ReactNode;
@@ -210,15 +247,16 @@ function SettingsRow({
   external?: boolean;
 }) {
   const inner = (
-    <div className={rowClasses}>
+    <div className={cn(rowClasses, !href && "hover:bg-transparent")}>
       <span className={tileClasses}>{icon}</span>
       <div className="grid min-w-0 flex-1 gap-0.5">
         <p className="truncate text-sm font-medium text-fg">{title}</p>
         {subtitle ? <p className="truncate text-xs text-fg-muted">{subtitle}</p> : null}
       </div>
-      {trailing ?? <PiCaretRightBold className="size-3.5 text-fg-subtle" />}
+      {trailing ?? (href ? <PiCaretRightBold className="size-3.5 text-fg-subtle" /> : null)}
     </div>
   );
+  if (!href) return inner;
   if (external) {
     return (
       <a href={href} target="_blank" rel="noopener noreferrer" className="focus-ring block">

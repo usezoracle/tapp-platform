@@ -69,6 +69,7 @@ export function MovementList({
   movements,
   emptyState,
   equityByRef,
+  grouped = false,
   className,
 }: {
   movements: Movement[];
@@ -79,6 +80,12 @@ export function MovementList({
    * is exactly the ledger.
    */
   equityByRef?: Map<string, EquityActivityItem>;
+  /**
+   * One panel per day, under a day label that stays put while its rows
+   * scroll past. Rows then carry the time of day, since the day is already
+   * said once above them.
+   */
+  grouped?: boolean;
   className?: string;
 }) {
   if (!movements.length) {
@@ -91,13 +98,86 @@ export function MovementList({
     );
   }
 
+  if (!grouped) {
+    return (
+      <div className={cn(listClasses, className)}>
+        {movements.map((m) => (
+          <MovementRow key={m.id} movement={m} equity={equityFor(m, equityByRef)} />
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div className={cn(listClasses, className)}>
-      {movements.map((m) => (
-        <MovementRow key={m.id} movement={m} equity={equityFor(m, equityByRef)} />
+    <div className={cn("grid gap-4", className)}>
+      {groupByDay(movements).map((group) => (
+        <section key={group.key} className="grid gap-2">
+          <h3 className="sticky-label eyebrow -mx-1 px-1 py-1">{group.label}</h3>
+          <div className={listClasses}>
+            {group.movements.map((m) => (
+              <MovementRow
+                key={m.id}
+                movement={m}
+                equity={equityFor(m, equityByRef)}
+                when={timeOfDay(m.at)}
+              />
+            ))}
+          </div>
+        </section>
       ))}
     </div>
   );
+}
+
+interface DayGroup {
+  key: string;
+  label: string;
+  movements: Movement[];
+}
+
+/**
+ * Consecutive movements on the same local day. The list arrives newest
+ * first, so a day's rows are already adjacent; this only draws the lines
+ * between days.
+ */
+function groupByDay(movements: Movement[]): DayGroup[] {
+  const out: DayGroup[] = [];
+  for (const m of movements) {
+    const key = dayKey(m.at);
+    const last = out[out.length - 1];
+    if (last && last.key === key) last.movements.push(m);
+    else out.push({ key, label: dayLabel(m.at), movements: [m] });
+  }
+  return out;
+}
+
+function dayKey(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "unknown";
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/** Today, Yesterday, then the date -- with the year once it is not this one. */
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "Unknown day";
+  const now = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return d.toLocaleDateString("en-NG", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: d.getFullYear() === now.getFullYear() ? undefined : "numeric",
+  });
+}
+
+function timeOfDay(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return d.toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" });
 }
 
 /**
@@ -119,7 +199,16 @@ function equityFor(
 }
 
 /** 48px row: quiet icon tile, label + when, right-aligned tabular amount. */
-function MovementRow({ movement, equity }: { movement: Movement; equity?: EquityActivityItem }) {
+function MovementRow({
+  movement,
+  equity,
+  when: whenText,
+}: {
+  movement: Movement;
+  equity?: EquityActivityItem;
+  /** Overrides the relative "2h ago" -- a grouped list passes the time. */
+  when?: string;
+}) {
   const { icon, label } = describe(movement.reason);
   const incoming = movement.amount.minor > 0;
 
@@ -139,7 +228,7 @@ function MovementRow({ movement, equity }: { movement: Movement; equity?: Equity
         <span className="truncate text-sm font-medium text-fg">{label}</span>
         <span className="truncate text-xs text-fg-muted">
           {held ? "Held · " : ""}
-          {when(movement.at)}
+          {whenText ?? when(movement.at)}
         </span>
         {/* Its own line, not appended to the date: beside a right-aligned
             amount there is not room for both, and "+0.125 MAMAPUT sha…" tells

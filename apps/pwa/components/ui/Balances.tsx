@@ -66,17 +66,23 @@ export function Balances({
       </div>
 
       {parts.length ? (
-        <div className="grid gap-2 border-t border-line pt-3">
+        <dl className="grid divide-y divide-line border-t border-line">
           {parts.map((b) => (
-            <div key={b.currency} className="grid gap-0.5">
-              <div className="flex items-center justify-between gap-3">
+            <div key={b.currency} className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5 py-2">
+              <dt>
                 <CurrencyTag code={b.currency} />
+              </dt>
+              <dd className="text-right">
                 <Amount value={b.available} size="md" />
-              </div>
-              {b.escrow.minor !== 0 ? <Escrowed amount={b.escrow} /> : null}
+              </dd>
+              {b.escrow.minor !== 0 ? (
+                <dd className="col-span-2">
+                  <Escrowed amount={b.escrow} />
+                </dd>
+              ) : null}
             </div>
           ))}
-        </div>
+        </dl>
       ) : null}
     </div>
   );
@@ -92,11 +98,11 @@ export function Balances({
  */
 function Escrowed({ amount }: { amount: CurrencyBalance["escrow"] }) {
   return (
-    <p className="flex items-center gap-1.5 text-xs text-fg-muted [&>svg]:size-3.5">
+    <span className="flex items-center gap-1.5 text-xs text-fg-muted [&>svg]:size-3.5">
       <PiLockSimpleBold className="shrink-0" />
       <Amount value={amount} size="sm" className="font-normal" /> held for a
       handover
-    </p>
+    </span>
   );
 }
 
@@ -118,17 +124,17 @@ export function BalanceActions() {
   return (
     <div className="grid grid-cols-3 gap-2">
       <Link href="/cash" className="block">
-        <Button variant="primary" leadingIcon={<PiMoneyWavyBold />} className="px-2 [&_svg]:size-4">
+        <Button variant="primary" leadingIcon={<PiMoneyWavyBold />} className="whitespace-nowrap px-2 [&_svg]:size-4">
           Cash in
         </Button>
       </Link>
       <Link href="/deposit" className="block">
-        <Button variant="secondary" leadingIcon={<PiArrowDownLeftBold />} className="px-2 [&_svg]:size-4">
+        <Button variant="secondary" leadingIcon={<PiArrowDownLeftBold />} className="whitespace-nowrap px-2 [&_svg]:size-4">
           Receive
         </Button>
       </Link>
       <Link href="/pay" className="block">
-        <Button variant="secondary" leadingIcon={<PiQrCodeBold />} className="px-2 [&_svg]:size-4">
+        <Button variant="secondary" leadingIcon={<PiQrCodeBold />} className="whitespace-nowrap px-2 [&_svg]:size-4">
           Pay
         </Button>
       </Link>

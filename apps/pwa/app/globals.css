@@ -17,6 +17,14 @@
   /* Mobile container width: 412px content + 16px padding either side */
   --max-width-mobile: 428px;
 
+  /* From 768px the app stops being a wider phone. A 240px rail on the
+     left, and beside it either the full content area (1080px + 32px
+     gutters) for the screens that have something to spread out, or a
+     560px column for the flows that are one thing after another. */
+  --spacing-rail: 240px;
+  --max-width-content: 1144px;
+  --max-width-flow: 624px;
+
   /* Inter for text, Bricolage Grotesque for display numerals + titles
      (both wired through next/font in layout.tsx). */
   --font-sans:
@@ -222,6 +230,20 @@ body {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg-muted);
+}
+
+/* Sticky day label above a group of rows. Sits under the fixed 56px
+   navbar on the phone; from 768px the rail replaces the navbar and the
+   label can pin to the top edge. The solid ground is what keeps rows
+   from showing through as they scroll under it. */
+@utility sticky-label {
+  position: sticky;
+  top: 56px;
+  z-index: 10;
+  background: var(--surface);
+  @media (min-width: 768px) {
+    top: 0;
+  }
 }
 
 /* Headings: tight tracking. */

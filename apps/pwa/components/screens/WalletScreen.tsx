@@ -4,7 +4,8 @@ import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PiWarningBold } from "react-icons/pi";
-import { Screen, SectionHeader } from "@/components/ui/Screen";
+import { Screen, Section } from "@/components/ui/Screen";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Balances, BalanceActions } from "@/components/ui/Balances";
 import { MovementList } from "@/components/ui/MovementList";
@@ -17,7 +18,7 @@ import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
 import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
 import { Web3Avatar } from "@/components/ui/Web3Avatar";
 import { SharesModule } from "@/components/holdings/SharesModule";
-import { linkClasses } from "@/components/ui/Styles";
+import { sectionLinkClasses, stackClasses } from "@/components/ui/Styles";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import { useBalances, useActivity, useCard } from "@/lib/ledger";
@@ -47,18 +48,23 @@ export function WalletScreen() {
 
   return (
     <Screen>
-      <AnimatedComponent variant={slideInOut} className="grid gap-6 py-4">
-        <header className="flex items-center gap-3">
+      <AnimatedComponent variant={slideInOut} className={cn(stackClasses, "py-4")}>
+        {/* Who is signed in. On the phone it is the one place that says so;
+            from 768px the rail says it, so the screen takes a title instead. */}
+        <header className="flex items-center gap-3 md:hidden">
           <Web3Avatar address={session.email} size={32} />
           <p className="min-w-0 flex-1 truncate text-[13px] text-fg-muted">{session.email}</p>
         </header>
+        <div className="hidden md:block">
+          <PageHeader title="Wallet" hideBack subtitle="Your balance, card and shares." />
+        </div>
 
         <CrossFade
-          className="grid gap-6"
+          className={stackClasses}
           branchKey={balances.isLoading ? "loading" : balances.isError ? "error" : "ready"}
         >
           {balances.isLoading ? (
-            <div className="grid gap-6">
+            <div className={stackClasses}>
               <div className="grid gap-2">
                 <Skeleton className="h-3 w-14" />
                 <Skeleton className="h-10 w-48" />
@@ -83,50 +89,56 @@ export function WalletScreen() {
               </p>
             </InfoBanner>
           ) : (
-            <>
-              <Balances balances={balances.data ?? []} />
-              <BalanceActions />
+            /* From 1024px: what you have and what you can do with it on the
+               left; what has happened on the right, as the full list. */
+            <div className={cn(stackClasses, "lg:grid-cols-2 lg:items-start lg:gap-x-12")}>
+              <div className={stackClasses}>
+                <section className="grid gap-4">
+                  <Balances balances={balances.data ?? []} />
+                  <BalanceActions />
+                </section>
 
-              <SharesModule />
+                {card.data === null ? <NoCardBanner /> : null}
+                {card.data ? <CardAllowanceWidget card={card.data} /> : null}
 
-              {card.data === null ? <NoCardBanner /> : null}
-              {card.data ? <CardAllowanceWidget card={card.data} /> : null}
-
-              {card.data?.needs_resync ? (
-                <InfoBanner
-                  tone="warning"
-                  icon={<PiWarningBold />}
-                  action={
-                    <Link href="/cards/resync" className="block">
-                      <Button variant="secondary" size="sm" fullWidth={false}>
-                        Resync
-                      </Button>
-                    </Link>
-                  }
-                >
-                  <p className="font-medium">Card out of sync</p>
-                  <p className="mt-0.5 text-xs">A quick resync keeps it working at the counter.</p>
-                </InfoBanner>
-              ) : null}
-
-              <section className="grid gap-3">
-                <SectionHeader
-                  title="Recent activity"
-                  action={
-                    activity.data?.nextCursor ? (
-                      <Link href="/history" className={cn(linkClasses, "text-xs")}>
-                        View all
+                {card.data?.needs_resync ? (
+                  <InfoBanner
+                    tone="warning"
+                    icon={<PiWarningBold />}
+                    action={
+                      <Link href="/cards/resync" className="block">
+                        <Button variant="secondary" size="sm" fullWidth={false}>
+                          Resync
+                        </Button>
                       </Link>
-                    ) : undefined
-                  }
-                />
+                    }
+                  >
+                    <p className="font-medium">Card out of sync</p>
+                    <p className="mt-0.5 text-xs">A quick resync keeps it working at the counter.</p>
+                  </InfoBanner>
+                ) : null}
 
+                <SharesModule />
+              </div>
+
+              <Section
+                title="Recent activity"
+                description="Every movement of your money, in and out."
+                action={
+                  activity.data?.movements.length ? (
+                    <Link href="/history" className={sectionLinkClasses}>
+                      View all
+                    </Link>
+                  ) : undefined
+                }
+              >
                 {activity.isLoading ? (
                   <SkeletonRows rows={3} />
                 ) : (
                   <MovementList
                     movements={activity.data?.movements ?? []}
                     equityByRef={equityByRef}
+                    grouped
                     emptyState={
                       <EmptyState title="No activity yet">
                         Add cash through an agent, or receive USDC on Base, and it will show
@@ -135,8 +147,8 @@ export function WalletScreen() {
                     }
                   />
                 )}
-              </section>
-            </>
+              </Section>
+            </div>
           )}
         </CrossFade>
       </AnimatedComponent>

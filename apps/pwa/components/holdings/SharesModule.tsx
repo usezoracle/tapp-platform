@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { PiArrowClockwiseBold } from "react-icons/pi";
-import { SectionHeader } from "@/components/ui/Screen";
+import { Section } from "@/components/ui/Screen";
 import { InfoBanner } from "@/components/ui/InfoBanner";
 import { Button } from "@/components/ui/Button";
 import { SkeletonRows } from "@/components/ui/Skeleton";
-import { listClasses, linkClasses } from "@/components/ui/Styles";
+import { listClasses, sectionLinkClasses } from "@/components/ui/Styles";
 import { cn } from "@/lib/utils";
 import type { Money } from "@/lib/api";
 import {
@@ -29,17 +29,17 @@ export function SharesModule() {
   if (q.isError && isFeatureDisabled(q.error)) return null;
 
   return (
-    <section className="grid gap-3">
-      <SectionHeader
-        title="Your shares"
-        action={
-          q.data && q.data.holdings.length > 0 ? (
-            <Link href="/holdings" className={cn(linkClasses, "text-xs")}>
-              View all
-            </Link>
-          ) : null
-        }
-      />
+    <Section
+      title="Your shares"
+      description="A slice of every business you tap at."
+      action={
+        q.data && q.data.holdings.length > 0 ? (
+          <Link href="/holdings" className={sectionLinkClasses}>
+            View all
+          </Link>
+        ) : null
+      }
+    >
 
       {q.isLoading ? (
         <SkeletonRows rows={2} />
@@ -73,18 +73,33 @@ export function SharesModule() {
           ))}
         </div>
       ) : null}
-    </section>
+    </Section>
   );
 }
 
-/** Total value, cost, and value-vs-cost change. Shared by home and /holdings. */
+/**
+ * Total value, cost, and value-vs-cost change. Shared by home and /holdings.
+ * `large` is the hero form under a section eyebrow, so it carries no label
+ * of its own.
+ */
 export function PortfolioTotals({ value, cost, large }: { value: Money; cost: Money; large?: boolean }) {
   const bps = cost.minor > 0 ? Math.round(((value.minor - cost.minor) / cost.minor) * 10_000) : 0;
+  if (large) {
+    return (
+      <div className="grid gap-1">
+        <p className="display text-[32px] leading-9">{value.display}</p>
+        <p className="flex items-center gap-2 text-[13px] tabular-nums text-fg-muted">
+          <span className={cn("font-medium", changeClass(bps))}>{formatBps(bps)}</span>
+          <span>· Cost {cost.display}</span>
+        </p>
+      </div>
+    );
+  }
   return (
-    <div className={cn("flex items-end justify-between", large ? "py-1" : "px-3 py-3")}>
+    <div className="flex items-end justify-between gap-4 px-3 py-3">
       <div className="grid gap-0.5">
-        <p className={large ? "eyebrow" : "text-xs text-fg-muted"}>Total value</p>
-        <p className={cn("display", large ? "text-[32px] leading-9" : "text-2xl leading-7")}>{value.display}</p>
+        <p className="text-xs text-fg-muted">Total value</p>
+        <p className="display text-2xl leading-7">{value.display}</p>
       </div>
       <div className="grid gap-0.5 text-right">
         <p className="text-xs tabular-nums text-fg-muted">Cost {cost.display}</p>

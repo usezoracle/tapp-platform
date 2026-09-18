@@ -3,15 +3,16 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { PiArrowClockwiseBold } from "react-icons/pi";
-import { Screen, SectionHeader } from "@/components/ui/Screen";
+import { Screen, Section } from "@/components/ui/Screen";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { InfoBanner } from "@/components/ui/InfoBanner";
 import { Button } from "@/components/ui/Button";
 import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
-import { listClasses } from "@/components/ui/Styles";
+import { listClasses, stackClasses } from "@/components/ui/Styles";
 import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
-import { HoldingRow } from "@/components/holdings/HoldingRow";
+import { HoldingRow, HoldingTableHeader } from "@/components/holdings/HoldingRow";
 import { PortfolioTotals } from "@/components/holdings/SharesModule";
+import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import {
   useHoldings,
@@ -34,7 +35,7 @@ export default function HoldingsPage() {
 
   return (
     <Screen>
-      <AnimatedComponent variant={slideInOut} className="grid gap-6 py-4">
+      <AnimatedComponent variant={slideInOut} className={cn(stackClasses, "py-4")}>
         <PageHeader
           title="Your shares"
           back="/"
@@ -75,28 +76,30 @@ export default function HoldingsPage() {
           )
         ) : q.data ? (
           <>
-            <PortfolioTotals value={q.data.total_value} cost={q.data.total_cost} large />
+            <Section title="Value" description="What your shares are worth at the last session price.">
+              <PortfolioTotals value={q.data.total_value} cost={q.data.total_cost} large />
+            </Section>
 
-            <section className="grid gap-3">
-              <SectionHeader
-                title={`${q.data.holdings.length} ${q.data.holdings.length === 1 ? "business" : "businesses"}`}
-              />
+            <Section
+              title="Businesses"
+              description={`${q.data.holdings.length} ${q.data.holdings.length === 1 ? "business" : "businesses"} · locked for 120 days from the tap that earned them, then sellable.`}
+            >
               {q.data.holdings.length === 0 ? (
                 <div className="panel px-4 py-5 text-[13px] leading-5 text-fg-muted">
                   Every tap at a participating business earns you a slice of it. None yet.
                 </div>
               ) : (
                 <div className={listClasses}>
+                  <HoldingTableHeader />
                   {q.data.holdings.map((h) => (
-                    <HoldingRow key={h.symbol} holding={h} />
+                    <HoldingRow key={h.symbol} holding={h} layout="table" />
                   ))}
                 </div>
               )}
-            </section>
+            </Section>
 
             <p className="text-xs leading-5 text-fg-subtle">
-              Shares earned from taps are locked for 120 days from the day you earn them, then
-              become sellable. Prices come from the last Freedom Exchange session.
+              Prices come from the last Freedom Exchange session.
             </p>
           </>
         ) : null}

@@ -12,6 +12,8 @@ import { EmptyState } from "@/components/ui/Surface";
 import { MovementList } from "@/components/ui/MovementList";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
+import { stackClasses } from "@/components/ui/Styles";
+import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import { request, type Movement } from "@/lib/api";
 import { useEquityActivity, indexEquityByTapId } from "@/lib/holdings";
@@ -66,7 +68,7 @@ export default function HistoryPage() {
 
   return (
     <Screen>
-      <AnimatedComponent variant={slideInOut} className="grid gap-6 py-4">
+      <AnimatedComponent variant={slideInOut} className={cn(stackClasses, "py-4")}>
         <PageHeader
           title="Activity"
           hideBack
@@ -91,6 +93,7 @@ export default function HistoryPage() {
             <MovementList
               movements={movements}
               equityByRef={equityByRef}
+              grouped
               emptyState={
                 <EmptyState title="Nothing here yet">
                   Add cash through an agent, or receive USDC on Base, and every movement will
@@ -100,13 +103,16 @@ export default function HistoryPage() {
             />
 
             {next ? (
-              <Button
-                variant="secondary"
-                loading={pages.isFetching}
-                onClick={() => setCursors((c) => [...c, next])}
-              >
-                Load more
-              </Button>
+              <div className="md:flex md:justify-center">
+                <Button
+                  variant="secondary"
+                  loading={pages.isFetching}
+                  onClick={() => setCursors((c) => [...c, next])}
+                  className="md:w-auto md:px-6"
+                >
+                  Load more
+                </Button>
+              </div>
             ) : movements.length ? (
               <p className="text-xs text-fg-subtle">That is everything.</p>
             ) : null}

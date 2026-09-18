@@ -8,8 +8,9 @@ import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { useSession } from "@/lib/auth";
 import { Button } from "@/components/ui/Button";
 import { shouldShowBottomNav } from "./BottomNav";
+import { cn } from "@/lib/utils";
 
-export function Navbar() {
+export function Navbar({ className }: { className?: string }) {
   const { hydrated, session, clear } = useSession();
   const pathname = usePathname() ?? "";
   const [mounted, setMounted] = useState(false);
@@ -18,8 +19,8 @@ export function Navbar() {
 
   if (!mounted) {
     return (
-      <header className="fixed left-0 top-0 z-20 w-full border-b border-line bg-surface transition-colors">
-        <nav className="mx-auto flex h-14 w-full max-w-mobile items-center justify-between px-4">
+      <header className={cn("fixed left-0 top-0 z-20 w-full border-b border-line bg-surface transition-colors", className)}>
+        <nav className="mx-auto flex h-14 w-full max-w-mobile items-center justify-between px-4 md:max-w-flow md:px-8">
           <Logo />
         </nav>
       </header>
@@ -30,10 +31,10 @@ export function Navbar() {
   const navVisible = isLoggedIn && shouldShowBottomNav(pathname);
 
   return (
-    <header className="fixed left-0 top-0 z-20 w-full border-b border-line bg-surface transition-colors">
+    <header className={cn("fixed left-0 top-0 z-20 w-full border-b border-line bg-surface transition-colors", className)}>
       <nav
         aria-label="Navbar"
-        className="mx-auto flex h-14 w-full max-w-mobile items-center justify-between px-4 text-fg"
+        className="mx-auto flex h-14 w-full max-w-mobile items-center justify-between px-4 text-fg md:max-w-flow md:px-8"
       >
         <Link href={isLoggedIn ? "/" : "/sign-in"} className="focus-ring flex items-center rounded-sm">
           <Logo />

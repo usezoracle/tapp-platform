@@ -40,3 +40,12 @@ export const rowClasses =
 /** 28px quiet tile holding a 16px icon. */
 export const tileClasses =
   "grid size-7 shrink-0 place-items-center rounded-sm bg-sunken text-fg-muted [&>svg]:size-4";
+
+/** A section's action: "View all", "Manage". Right-aligned, accent, text only. */
+export const sectionLinkClasses = `${linkClasses} text-xs`;
+
+/** The vertical rhythm between sections: 24px on the phone, 32px from 768px. */
+export const stackClasses = "grid gap-6 md:gap-8";
+
+/** Table-like list row (holdings on a wide screen): aligned columns. */
+export const cellLabelClasses = "text-xs text-fg-muted";
