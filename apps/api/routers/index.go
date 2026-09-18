@@ -265,6 +265,14 @@ func authRoutes(route *gin.Engine) {
 	v1.GET("me/balances", middleware.JWTMiddleware, balances.Balances)
 	v1.GET("me/activity", middleware.JWTMiddleware, balances.Activity)
 
+	// What the cardholder's taps have bought them on the equity market.
+	// Thin proxies to the market, keyed on the user id; 404 without a
+	// market, 503 when it cannot be reached.
+	holdings := &apiv1.HoldingsHandler{Client: apiv1.SharedEquity(), User: apiv1.UserFromContext}
+	v1.GET("me/holdings", middleware.JWTMiddleware, holdings.List)
+	v1.GET("me/holdings/:symbol", middleware.JWTMiddleware, holdings.Get)
+	v1.GET("me/equity-activity", middleware.JWTMiddleware, holdings.Activity)
+
 	// Currency conversion. Two steps by design: a price is offered, then
 	// accepted. Quoting and executing in one call would convert at whatever
 	// the rate happened to be when the request arrived, which is what the
@@ -341,6 +349,11 @@ func senderRoutes(route *gin.Engine) {
 			// The tap records what has to be sold; the settler sells it a
 			// moment later, from the cardholder's own account.
 			Settle: apiv1.RecordTapSettlement(offrampSettler),
+			// And that the equity market has to hear of it. Queued in the
+			// tap's transaction, delivered by a worker; nil without a
+			// market, and the tap package never learns one exists.
+			Equity:         apiv1.RecordTapEquity(apiv1.SharedEquity()),
+			EquityReversal: apiv1.RecordReversalEquity(apiv1.SharedEquity()),
 		},
 		Merchant: apiv1.MerchantFromContext,
 	}
@@ -349,6 +362,16 @@ func senderRoutes(route *gin.Engine) {
 	me.POST("tap-card/:tap_id/token-ack", tapHandler.Acknowledge)
 	me.POST("tap-card/:tap_id/reverse", tapHandler.Reverse)
 	me.GET("tap-card/step-up", cardsCtrl.TapCardStepUpPoll)
+
+	// The merchant's business on the equity market: register (= list), and
+	// read the record with its live cap table. Off without a market, and
+	// the handlers say so.
+	businessHandler := &apiv1.BusinessHandler{
+		Pool: storage.Pool, Client: apiv1.SharedEquity(), Merchant: apiv1.MerchantFromContext,
+	}
+	me.POST("business", businessHandler.Create)
+	me.GET("business", businessHandler.Get)
+	me.GET("business/holders", businessHandler.Holders)
 }
 
 func providerRoutes(route *gin.Engine) {

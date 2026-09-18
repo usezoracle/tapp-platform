@@ -296,3 +296,63 @@ func TestStatsCountWhatStoodAndSkipWhatWasReversed(t *testing.T) {
 		t.Errorf("nothing since the future, got %d", s.Count)
 	}
 }
+
+// What the equity market did with a tap is read from the outbox row the
+// tap's transaction wrote and the answer the worker stored on it. A tap that
+// was never queued has no equity at all -- not an empty one.
+func TestATapShowsWhatTheMarketDidWithIt(t *testing.T) {
+	pool := testPool(t)
+	w := build(t, pool)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// settled: allocated shares. refundedOnce: queued, not yet delivered.
+	// failed: delivery given up. reversed: allocated, then unwound.
+	exec(`INSERT INTO equity_outbox (kind, tap_id, payload, state, response) VALUES
+		('tap', $1, '{}', 'delivered', '{"tap_ref":"x","intent_state":"allocated","allocated_units":12500000,"price_kobo":4000,"symbol":"MAMAPUT"}'),
+		('tap', $2, '{}', 'pending', NULL),
+		('tap', $3, '{}', 'failed', NULL),
+		('tap', $4, '{}', 'delivered', '{"intent_state":"allocated","allocated_units":1000,"price_kobo":4000,"symbol":"MAMAPUT"}'),
+		('reverse', $4, '{}', 'delivered', '{"state":"reversed","unwound_units":1000}')`,
+		w.settled, w.refundedOnce, w.failed, w.reversed)
+
+	items, _, err := List(ctx, pool, Filter{MerchantProfile: &w.merchantProfile, MerchantUser: &w.merchantUser, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := byID(items)
+
+	e := got[w.settled].Equity
+	if e == nil || e.State != EquityAllocated || e.Symbol != "MAMAPUT" || e.Units != 12_500_000 ||
+		e.Shares != "0.125" || e.Price.Minor() != 4000 || e.Price.Currency() != money.NGN {
+		t.Errorf("allocated tap equity = %+v", e)
+	}
+	if e := got[w.refundedOnce].Equity; e == nil || e.State != EquityQueued || e.Symbol != "" {
+		t.Errorf("queued tap equity = %+v", e)
+	}
+	if e := got[w.failed].Equity; e == nil || e.State != EquityFailed {
+		t.Errorf("failed tap equity = %+v", e)
+	}
+	if e := got[w.reversed].Equity; e == nil || e.State != EquityReversed || e.Units != 1000 {
+		t.Errorf("reversed tap equity = %+v", e)
+	}
+	if got[w.offramp].Equity != nil {
+		t.Errorf("an offramp has equity: %+v", got[w.offramp].Equity)
+	}
+
+	one, err := Get(ctx, pool, w.settled)
+	if err != nil || one.Equity == nil || one.Equity.State != EquityAllocated {
+		t.Errorf("Get: %v %+v", err, one.Equity)
+	}
+
+	// An escrowed answer (unlisted merchant) has no symbol and no price.
+	exec(`UPDATE equity_outbox SET response = '{"intent_state":"escrowed","symbol":null,"allocated_units":0,"price_kobo":0}' WHERE tap_id = $1 AND kind = 'tap'`, w.settled)
+	one, _ = Get(ctx, pool, w.settled)
+	if e := one.Equity; e == nil || e.State != EquityEscrowed || e.Symbol != "" || e.Price.Currency() != "" {
+		t.Errorf("escrowed tap equity = %+v", one.Equity)
+	}
+}

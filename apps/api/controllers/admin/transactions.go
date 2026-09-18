@@ -53,9 +53,34 @@ type transactionView struct {
 	LastError string `json:"last_error,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 
+	// What the equity market did with a tap; null when it was never sent
+	// to one.
+	Equity *equityView `json:"equity"`
+
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 	SettledAt string `json:"settled_at,omitempty"`
+}
+
+// equityView is a tap's outcome on the equity market.
+type equityView struct {
+	// State: queued | failed | escrowed | pending | allocated | reversed.
+	State  string       `json:"state"`
+	Symbol *string      `json:"symbol"`
+	Units  int64        `json:"units"` // 1e-8 of a share
+	Shares string       `json:"shares"`
+	Price  money.Amount `json:"price"` // null when nothing was bought
+}
+
+func equityOf(e *transactions.Equity) *equityView {
+	if e == nil {
+		return nil
+	}
+	v := &equityView{State: e.State, Units: e.Units, Shares: e.Shares, Price: e.Price}
+	if e.Symbol != "" {
+		v.Symbol = &e.Symbol
+	}
+	return v
 }
 
 type entryView struct {
@@ -94,6 +119,7 @@ func view(t transactions.Transaction) transactionView {
 			Institution: t.Bank.Institution, AccountNumber: t.Bank.AccountNumber, AccountName: t.Bank.AccountName,
 		},
 		Round: t.Round, OrderID: t.OrderID, TxHash: t.TxHash, LastError: t.LastError, Reason: t.Reason,
+		Equity:    equityOf(t.Equity),
 		CreatedAt: t.CreatedAt.UTC().Format(tsLayout),
 		UpdatedAt: t.UpdatedAt.UTC().Format(tsLayout),
 	}

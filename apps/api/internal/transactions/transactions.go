@@ -11,6 +11,7 @@ package transactions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/usezoracle/tapp/api/internal/equity"
 	"github.com/usezoracle/tapp/api/internal/ledger"
 	"github.com/usezoracle/tapp/api/internal/money"
 )
@@ -90,6 +92,84 @@ type Transaction struct {
 
 	Bank   Bank
 	Reason string // why it was reversed, when it was
+
+	// Equity is what the equity market did with a tap: nil when the tap was
+	// never queued for it (the feature was off, or the tap was not naira).
+	Equity *Equity
+}
+
+// Equity is a tap's outcome on the equity market.
+//
+// State is one vocabulary over two facts -- whether Freedom has been told,
+// and what it did:
+//
+//	queued     in the outbox, not yet acknowledged by the market
+//	failed     delivery was given up on; an operator has to look
+//	escrowed   delivered; the merchant is not listed, so the funding accrues
+//	pending    delivered; the funding waits for a session with a price
+//	allocated  shares were bought: Units of Symbol at Price
+//	reversed   the tap was reversed and the market has unwound it
+type Equity struct {
+	State  string
+	Symbol string // empty when the merchant is not listed
+	Units  int64  // 1e-8 of a share
+	Shares string // Units as a human figure
+	Price  money.Amount
+}
+
+// Equity states.
+const (
+	EquityQueued    = "queued"
+	EquityFailed    = "failed"
+	EquityEscrowed  = "escrowed"
+	EquityPending   = "pending"
+	EquityAllocated = "allocated"
+	EquityReversed  = "reversed"
+)
+
+// equityFrom reads a tap's market outcome from its outbox rows.
+func equityFrom(tapState, reverseState *string, response []byte) *Equity {
+	if tapState == nil {
+		return nil
+	}
+	e := &Equity{State: EquityQueued}
+	switch *tapState {
+	case equity.StateFailed:
+		e.State = EquityFailed
+		return e
+	case equity.StatePending:
+		return e
+	}
+
+	var r equity.TapResponse
+	if len(response) > 0 {
+		if err := json.Unmarshal(response, &r); err != nil {
+			// A delivered row whose answer cannot be read is still
+			// delivered; the tap's state is known even if the detail is
+			// not.
+			return &Equity{State: EquityPending}
+		}
+	}
+	if r.Symbol != nil {
+		e.Symbol = *r.Symbol
+	}
+	e.Units = r.AllocatedUnits
+	e.Shares = equity.Shares(r.AllocatedUnits)
+	if r.PriceKobo > 0 {
+		e.Price = money.New(r.PriceKobo, money.NGN)
+	}
+	switch r.IntentState {
+	case "allocated":
+		e.State = EquityAllocated
+	case "escrowed":
+		e.State = EquityEscrowed
+	default:
+		e.State = EquityPending
+	}
+	if reverseState != nil && *reverseState == equity.StateDelivered {
+		e.State = EquityReversed
+	}
+	return e
 }
 
 // Sold is the USDC sold for a tap, as a decimal string.
@@ -131,10 +211,13 @@ WITH all_txns AS (
                 ELSE 'pending' END AS status,
            coalesce(st.sell_micro, 0) AS sold_micro, coalesce(st.round, 0) AS round,
            st.order_id, st.tx_hash, st.last_error,
-           b.bank_code, b.account_number, b.account_name, r.reason
+           b.bank_code, b.account_number, b.account_name, r.reason,
+           eq.state AS equity_state, eqr.state AS equity_reverse_state, eq.response AS equity_response
       FROM card_taps t
       LEFT JOIN card_tap_settlements st ON st.tap_id = t.id
       LEFT JOIN card_tap_reversals   r  ON r.tap_id  = t.id
+      LEFT JOIN equity_outbox eq  ON eq.tap_id  = t.id AND eq.kind  = 'tap'
+      LEFT JOIN equity_outbox eqr ON eqr.tap_id = t.id AND eqr.kind = 'reverse'
       LEFT JOIN users u ON u.id = t.cardholder_id
       LEFT JOIN LATERAL (
             SELECT bank_code, account_number, account_name
@@ -152,7 +235,8 @@ WITH all_txns AS (
                               WHEN 'paying'     THEN 'processing'
                               ELSE o.state::text END,
            0, 0, NULL, NULL, o.failure,
-           o.bank_code, o.account_number, o.account_name, NULL
+           o.bank_code, o.account_number, o.account_name, NULL,
+           NULL, NULL, NULL
       FROM orders o
 )
 SELECT id, kind, created_at, updated_at, settled_at,
@@ -160,6 +244,7 @@ SELECT id, kind, created_at, updated_at, settled_at,
        currency, amount_minor, fee_minor, status,
        sold_micro, round, order_id, tx_hash, last_error,
        bank_code, account_number, account_name, reason,
+       equity_state, equity_reverse_state, equity_response,
        count(*) OVER () AS total
   FROM all_txns
  WHERE (($1::uuid IS NULL AND $2::uuid IS NULL)
@@ -232,6 +317,8 @@ func scan(rows pgx.Rows) (Transaction, int, error) {
 		email, orderID, txHash, lastErr  *string
 		bankCode, accountNo, accountName *string
 		reason                           *string
+		eqState, eqReverseState          *string
+		eqResponse                       []byte
 		total                            int
 	)
 	if err := rows.Scan(&t.ID, &t.Kind, &t.CreatedAt, &t.UpdatedAt, &t.SettledAt,
@@ -239,6 +326,7 @@ func scan(rows pgx.Rows) (Transaction, int, error) {
 		&cur, &amountMinor, &feeMinor, &t.Status,
 		&t.SoldMicro, &t.Round, &orderID, &txHash, &lastErr,
 		&bankCode, &accountNo, &accountName, &reason,
+		&eqState, &eqReverseState, &eqResponse,
 		&total); err != nil {
 		return Transaction{}, 0, fmt.Errorf("transactions: scan: %w", err)
 	}
@@ -250,6 +338,7 @@ func scan(rows pgx.Rows) (Transaction, int, error) {
 	t.OrderID, t.TxHash, t.LastError = str(orderID), str(txHash), str(lastErr)
 	t.Bank = Bank{Institution: str(bankCode), AccountNumber: str(accountNo), AccountName: str(accountName)}
 	t.Reason = str(reason)
+	t.Equity = equityFrom(eqState, eqReverseState, eqResponse)
 	return t, total, nil
 }
 

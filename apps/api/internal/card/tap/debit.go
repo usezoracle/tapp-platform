@@ -209,6 +209,20 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 			}
 		}
 
+		// 8b. And that the market has to hear about it, same transaction,
+		//     same reasoning: a queued delivery with no tap would buy shares
+		//     for a payment that never happened, and a tap with no delivery
+		//     is a cardholder who never receives the shares their spend
+		//     earned. Neither is recoverable from the other.
+		if s.Equity != nil {
+			if err := s.Equity(ctx, tx, Charged{
+				TapID: tapID, Cardholder: *k.Cardholder, Merchant: req.MerchantID,
+				Amount: req.Amount, At: now,
+			}); err != nil {
+				return err
+			}
+		}
+
 		// 9. The new token is PENDING. It becomes current only when the
 		//    merchant app confirms it reached the card.
 		next, err := token.New()

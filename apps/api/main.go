@@ -11,6 +11,7 @@ import (
 	"github.com/usezoracle/tapp/api/config"
 	apiv1 "github.com/usezoracle/tapp/api/internal/api/v1"
 	"github.com/usezoracle/tapp/api/internal/cash"
+	"github.com/usezoracle/tapp/api/internal/equity"
 	"github.com/usezoracle/tapp/api/internal/settlement"
 	"github.com/usezoracle/tapp/api/routers"
 	"github.com/usezoracle/tapp/api/services"
@@ -128,6 +129,13 @@ func main() {
 		// offramp still reserves and delivers through a provider.
 		go (&settlement.Worker{Pool: storage.Pool, Rail: baas.Default()}).
 			Run(context.Background(), settlementInterval())
+
+		// Tell the equity market about each tap, from the outbox the tap's
+		// own transaction wrote to. Nothing without a market.
+		if c := apiv1.SharedEquity(); c.Enabled() {
+			go (&equity.Worker{Pool: storage.Pool, Client: c}).
+				Run(context.Background(), config.EquityConfig().OutboxInterval)
+		}
 	}
 
 	// Run the server

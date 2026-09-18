@@ -114,6 +114,18 @@ type Service struct {
 	// charge is later financed by selling a token belongs to whoever wired
 	// the two together. Nil means settlement is handled elsewhere.
 	Settle func(ctx context.Context, tx pgx.Tx, tapID, cardholder uuid.UUID, amount money.Amount) error
+
+	// Equity records that a tap must be reported to the equity market, in
+	// the tap's own transaction, and EquityReversal the same for a reversal.
+	//
+	// The same shape as Settle, for the same reason: this package charges
+	// cards and must not know that a market exists, let alone how to reach
+	// one. Whoever wires the two together decides what "report" means; here
+	// it is one row in an outbox that a worker drains later, so a market
+	// that is slow or down cannot hold up a till. Nil means no market.
+	Equity         func(ctx context.Context, tx pgx.Tx, e Charged) error
+	EquityReversal func(ctx context.Context, tx pgx.Tx, tapID uuid.UUID, reason string) error
+
 	// Now is injectable so lockout and daily-window behaviour can be tested
 	// without waiting a day. Nil means time.Now.
 	Now func() time.Time
@@ -272,6 +284,16 @@ type Request struct {
 	PINResponse []byte
 	// StepUpRef is echoed back for a TierStepUp tap.
 	StepUpRef string
+}
+
+// Charged is what a tap's transaction knows about the charge it just made,
+// handed to the Equity hook.
+type Charged struct {
+	TapID      uuid.UUID
+	Cardholder uuid.UUID
+	Merchant   uuid.UUID
+	Amount     money.Amount
+	At         time.Time
 }
 
 // Receipt is what the merchant app needs after a successful debit.

@@ -125,6 +125,16 @@ cd contracts/gateway && sui move test
 
 ---
 
+## 📈 Equity market (optional)
+
+Taps can fund shares. With `FREEDOM_BASE_URL` and `FREEDOM_RAIL_TOKEN` set,
+every naira tap is queued (in the tap's own transaction) and delivered to
+Freedom's rail API by a background worker; merchants can list their business
+under `/v1/sender/me/business`, and cardholders see what their taps bought
+under `/v1/me/holdings`. With either unset the feature is off and nothing
+about taps changes. Wire shapes, env vars and the failure model are in
+[docs/equity.md](docs/equity.md).
+
 ## 🚢 Production Deployment
 
 For detailed production instructions, including setting up zkLogin, self-hosting the Mysten prover/salt service, publishing Move contracts, and executing end-to-end smoke tests, refer to [DEPLOYMENT.md](file:///Users/mac/rails/DEPLOYMENT.md).

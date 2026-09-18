@@ -50,6 +50,35 @@ type merchantOrderResponse struct {
 	} `json:"recipient"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// Equity is what the equity market did with a tap, or null when the tap
+	// was never sent to one. Additive: an app that does not know about it
+	// ignores it.
+	Equity *equityView `json:"equity"`
+}
+
+// equityView is a tap's outcome on the equity market, for the merchant app.
+type equityView struct {
+	// State: queued | failed | escrowed | pending | allocated | reversed.
+	State string `json:"state"`
+	// Symbol is null when the merchant is not listed.
+	Symbol *string `json:"symbol"`
+	// Units are 1e-8 of a share; Shares is the same figure for a human.
+	Units  int64  `json:"units"`
+	Shares string `json:"shares"`
+	// Price is what the shares were bought at, or null when none were.
+	Price money.Amount `json:"price"`
+}
+
+func equityOf(e *transactions.Equity) *equityView {
+	if e == nil {
+		return nil
+	}
+	v := &equityView{State: e.State, Units: e.Units, Shares: e.Shares, Price: e.Price}
+	if e.Symbol != "" {
+		v.Symbol = &e.Symbol
+	}
+	return v
 }
 
 // appStatus maps the list's vocabulary onto the app's.
@@ -89,6 +118,7 @@ func merchantView(t transactions.Transaction) merchantOrderResponse {
 		GatewayID: t.OrderID, TxHash: t.TxHash, Reference: t.ID.String(),
 		SenderFee: units(t.Fee),
 		CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
+		Equity: equityOf(t.Equity),
 	}
 	r.Recipient.Institution = t.Bank.Institution
 	r.Recipient.AccountIdentifier = t.Bank.AccountNumber
