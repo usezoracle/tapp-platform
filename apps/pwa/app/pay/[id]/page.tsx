@@ -172,12 +172,12 @@ export default function PayCheckoutPage({
                 </p>
                 <div className="mt-3 flex gap-2">
                   <Link href="/cash">
-                    <Button variant="secondary" fullWidth={false} className="px-3 py-1.5 text-xs">
+                    <Button variant="secondary" size="sm" fullWidth={false}>
                       Add cash
                     </Button>
                   </Link>
                   <Link href="/convert">
-                    <Button variant="secondary" fullWidth={false} className="px-3 py-1.5 text-xs">
+                    <Button variant="secondary" size="sm" fullWidth={false}>
                       Convert
                     </Button>
                   </Link>

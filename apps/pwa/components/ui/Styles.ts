@@ -1,27 +1,42 @@
 /**
- * Reusable Tailwind class strings — ported from paycrest/zap's
- * `app/components/Styles.ts`. Keep components thin: import these
+ * Reusable Tailwind class strings. Keep components thin: import these
  * directly rather than re-declaring per-button styling. Edit here to
- * adjust the whole app's visual language.
+ * adjust the whole app's visual language. Tokens come from
+ * app/globals.css (bg-surface, text-fg, border-line, …).
  */
 
-export const primaryBtnClasses =
-  "rounded-xl bg-blue-600 px-4 py-2.5 font-medium text-white transition-all hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 focus-visible:ring-offset-white active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:text-white dark:focus-visible:ring-offset-neutral-900 dark:disabled:bg-zinc-800 dark:disabled:text-white/50";
+const btnBase =
+  "focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50";
 
-export const secondaryBtnClasses =
-  "rounded-xl border border-gray-300 bg-white px-4 py-2.5 font-medium text-neutral-900 transition-all hover:bg-neutral-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2 focus-visible:ring-offset-white active:scale-95 dark:border-white/20 dark:bg-neutral-900 dark:text-white dark:hover:bg-white/10 dark:focus-visible:ring-offset-neutral-900";
+/** Near-black in light, white in dark. The one loud button on a screen. */
+export const primaryBtnClasses = `${btnBase} bg-primary text-primary-fg hover:bg-primary-hover`;
 
-export const ghostBtnClasses =
-  "rounded-xl bg-transparent px-4 py-2.5 font-medium text-neutral-900 transition-all hover:bg-neutral-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 active:scale-95 dark:text-white dark:hover:bg-white/10";
+export const secondaryBtnClasses = `${btnBase} border border-line bg-raised text-fg hover:bg-sunken`;
 
-export const dangerBtnClasses =
-  "rounded-xl bg-red-600 px-4 py-2.5 font-medium text-white transition-all hover:bg-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-600 focus-visible:ring-offset-2 focus-visible:ring-offset-white active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 dark:focus-visible:ring-offset-neutral-900";
+export const ghostBtnClasses = `${btnBase} bg-transparent text-fg hover:bg-sunken`;
+
+export const dangerBtnClasses = `${btnBase} bg-negative text-white hover:opacity-90`;
 
 export const inputClasses =
-  "w-full rounded-xl border border-gray-300 bg-white py-2 px-4 text-sm text-neutral-900 transition-all placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/20 dark:bg-neutral-900 dark:text-white/80 dark:placeholder:text-white/30 dark:focus-visible:ring-offset-neutral-900 disabled:cursor-not-allowed";
+  "focus-ring h-10 w-full rounded-md border border-line bg-raised px-3 text-sm text-fg transition-colors placeholder:text-fg-subtle hover:border-line-strong focus:border-line-strong disabled:cursor-not-allowed disabled:bg-sunken";
 
-export const cardClasses =
-  "rounded-2xl border border-gray-200 bg-white p-5 dark:border-white/10 dark:bg-neutral-900";
+export const labelClasses = "mb-1.5 block text-xs font-medium text-fg-muted";
 
-export const subtleCardClasses =
-  "rounded-2xl bg-gray-50 p-5 dark:bg-white/5";
+export const linkClasses =
+  "focus-ring rounded-sm text-sm font-medium text-accent hover:underline";
+
+/** Hairline panel — the only "card" in the system. Never nest one in another. */
+export const cardClasses = "panel p-4";
+
+export const subtleCardClasses = "rounded-lg bg-sunken p-4";
+
+/** List container: hairline border + solid hairline dividers. */
+export const listClasses = "panel divide-y divide-line overflow-hidden";
+
+/** 48px dense row. */
+export const rowClasses =
+  "flex min-h-12 items-center gap-3 px-3 py-2 transition-colors hover:bg-hover";
+
+/** 28px quiet tile holding a 16px icon. */
+export const tileClasses =
+  "grid size-7 shrink-0 place-items-center rounded-sm bg-sunken text-fg-muted [&>svg]:size-4";

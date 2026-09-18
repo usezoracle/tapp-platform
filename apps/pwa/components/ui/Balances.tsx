@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { PiLockSimpleBold } from "react-icons/pi";
+import {
+  PiArrowDownLeftBold,
+  PiLockSimpleBold,
+  PiMoneyWavyBold,
+  PiQrCodeBold,
+} from "react-icons/pi";
 import { cn } from "@/lib/utils";
 import { Amount, CurrencyTag } from "./Amount";
-import { Surface } from "./Surface";
+import { Button } from "./Button";
 import { HOME_CURRENCY, worthShowing, useBalanceTotal } from "@/lib/ledger";
 import type { CurrencyBalance } from "@/lib/api";
 
@@ -28,6 +33,9 @@ import type { CurrencyBalance } from "@/lib/api";
  *
  * With no rate available the server sends no total, and the headline falls
  * back to the home currency rather than inventing one.
+ *
+ * No box around any of it: the page is the container. The one big number
+ * on the home screen is set in the display face with tabular numerals.
  */
 export function Balances({
   balances,
@@ -48,11 +56,9 @@ export function Balances({
   );
 
   return (
-    <Surface radius="3xl" className={cn("grid gap-4", className)}>
+    <div className={cn("grid gap-3", className)}>
       <div className="grid gap-1">
-        <p className="text-xs font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
-          Balance
-        </p>
+        <p className="eyebrow">Balance</p>
         <Amount value={headline} size="hero" />
         {!total.data && home && home.escrow.minor !== 0 ? (
           <Escrowed amount={home.escrow} />
@@ -60,7 +66,7 @@ export function Balances({
       </div>
 
       {parts.length ? (
-        <div className="grid gap-2 border-t border-[var(--line)] pt-3">
+        <div className="grid gap-2 border-t border-line pt-3">
           {parts.map((b) => (
             <div key={b.currency} className="grid gap-0.5">
               <div className="flex items-center justify-between gap-3">
@@ -72,7 +78,7 @@ export function Balances({
           ))}
         </div>
       ) : null}
-    </Surface>
+    </div>
   );
 }
 
@@ -86,7 +92,7 @@ export function Balances({
  */
 function Escrowed({ amount }: { amount: CurrencyBalance["escrow"] }) {
   return (
-    <p className="flex items-center gap-1.5 text-xs text-[var(--fg-muted)]">
+    <p className="flex items-center gap-1.5 text-xs text-fg-muted [&>svg]:size-3.5">
       <PiLockSimpleBold className="shrink-0" />
       <Amount value={amount} size="sm" className="font-normal" /> held for a
       handover
@@ -97,30 +103,35 @@ function Escrowed({ amount }: { amount: CurrencyBalance["escrow"] }) {
 /**
  * The row of things you can do with a balance.
  *
- * Four, deliberately: the two ways money comes in and the two ways it goes
- * out. A fifth would push these to a scroll on a small phone, which is where
- * an action goes to be never used.
+ * Three, deliberately: the two ways money comes in and the one way it goes
+ * out at a counter. A fourth would push these to a scroll on a small phone,
+ * which is where an action goes to be never used.
+ *
+ * Cash in is the loud one. This is a naira product before it is a crypto
+ * one: the largest group of people it is for hold physical notes and want
+ * them in a balance.
  */
 export function BalanceActions() {
   // Receive goes to the chooser, not straight to a chain. Somebody adding
   // money has not yet decided whether they are handing over naira or sending
   // crypto, and sending them to one of the two answers is picking for them.
-  const actions = [
-    { href: "/cash", label: "Cash in" },
-    { href: "/deposit", label: "Receive" },
-    { href: "/pay", label: "Pay" },
-  ];
   return (
     <div className="grid grid-cols-3 gap-2">
-      {actions.map((a) => (
-        <Link
-          key={a.href}
-          href={a.href}
-          className="grid justify-items-center gap-1 rounded-2xl border border-[var(--line)] bg-[var(--raised)] px-1 py-3 text-center text-xs font-medium text-[var(--fg)] transition-colors hover:bg-[var(--sunken)]"
-        >
-          {a.label}
-        </Link>
-      ))}
+      <Link href="/cash" className="block">
+        <Button variant="primary" leadingIcon={<PiMoneyWavyBold />} className="px-2 [&_svg]:size-4">
+          Cash in
+        </Button>
+      </Link>
+      <Link href="/deposit" className="block">
+        <Button variant="secondary" leadingIcon={<PiArrowDownLeftBold />} className="px-2 [&_svg]:size-4">
+          Receive
+        </Button>
+      </Link>
+      <Link href="/pay" className="block">
+        <Button variant="secondary" leadingIcon={<PiQrCodeBold />} className="px-2 [&_svg]:size-4">
+          Pay
+        </Button>
+      </Link>
     </div>
   );
 }

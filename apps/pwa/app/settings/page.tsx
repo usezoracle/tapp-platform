@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  PiArrowLeftBold,
   PiCaretRightBold,
   PiCreditCardBold,
   PiSlidersHorizontalBold,
@@ -14,17 +13,18 @@ import {
   PiSignOutBold,
   PiCopyBold,
   PiCheckBold,
+  PiChartLineUpBold,
 } from "react-icons/pi";
-import { Screen } from "@/components/ui/Screen";
+import { Screen, SectionHeader } from "@/components/ui/Screen";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { StatusChip } from "@/components/ui/StatusChip";
-import {
-  AnimatedComponent,
-  slideInOut,
-} from "@/components/ui/AnimatedComponents";
-import { useSession } from "@/lib/auth";
-import { useCard, useDepositAddress, useKycStatus } from "@/lib/ledger";
+import { listClasses, rowClasses, tileClasses } from "@/components/ui/Styles";
+import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
 import { KycTierChip } from "@/components/ui/KycTierChip";
 import { Web3Avatar } from "@/components/ui/Web3Avatar";
+import { cn } from "@/lib/utils";
+import { useSession } from "@/lib/auth";
+import { useCard, useDepositAddress, useKycStatus } from "@/lib/ledger";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -58,143 +58,137 @@ export default function SettingsPage() {
 
   return (
     <Screen>
-      <AnimatedComponent
-        variant={slideInOut}
-        className="grid gap-6 py-10 text-sm text-neutral-900 dark:text-white"
-      >
-        <Link
-          href="/"
-          className="inline-flex w-fit items-center gap-1 text-xs font-medium text-gray-500 transition-colors hover:text-neutral-900 dark:text-white/50 dark:hover:text-white"
-        >
-          <PiArrowLeftBold /> Back to wallet
-        </Link>
+      <AnimatedComponent variant={slideInOut} className="grid gap-6 py-4">
+        <PageHeader
+          title="Settings"
+          back="/"
+          subtitle={session.email}
+          trailing={<Web3Avatar address={session.email} size={32} />}
+        />
 
-        <div className="flex items-center gap-3">
-          <Web3Avatar address={session.email} size={42} />
-          <div className="grid gap-0.5">
-            <h1 className="text-xl font-medium">Settings</h1>
-            <p className="break-all text-sm text-gray-500 dark:text-white/50">
-              {session.email}
-            </p>
-          </div>
-        </div>
-
-        <div className="grid divide-y divide-dashed divide-gray-200 overflow-hidden rounded-3xl border border-gray-200 dark:divide-white/10 dark:border-white/10">
-          <SettingsRow
-            href="/settings/card"
-            icon={<PiCreditCardBold />}
-            title="Linked Tapp Card"
-            subtitle={
-              card.data
-                ? "Manage your physical card"
-                : "Link a card for contactless spending"
-            }
-            badge={
-              card.data ? (
-                <StatusChip tone="success">Linked</StatusChip>
-              ) : (
-                <StatusChip>None</StatusChip>
-              )
-            }
-          />
-          {card.data && (
+        <section className="grid gap-3">
+          <SectionHeader title="Card" />
+          <div className={listClasses}>
             <SettingsRow
-              href="/settings/limits"
-              icon={<PiSlidersHorizontalBold />}
-              title="Spend limits"
-              subtitle="Daily, per-tap, step-up threshold"
-            />
-          )}
-          <SettingsRow
-            href="/settings/kyc"
-            icon={<PiIdentificationCardBold />}
-            title="Identity verification"
-            subtitle={
-              kyc.data?.next
-                ? `Next: ${kyc.data.next.tier_name}`
-                : kyc.data
-                  ? "Fully verified"
-                  : kyc.isError
-                    ? "Not available on this deployment"
-                    : "BVN and photo, raises your limits"
-            }
-            badge={
-              kyc.data ? <KycTierChip status={kyc.data} /> : <StatusChip>—</StatusChip>
-            }
-          />
-          <SettingsRow
-            href="/settings/security"
-            icon={<PiLockKeyBold />}
-            title="Security"
-            subtitle="Change PIN, sign out"
-          />
-        </div>
-
-        <div className="grid gap-2 rounded-3xl border border-gray-200 p-4 dark:border-white/10">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-medium uppercase tracking-wider text-gray-400 dark:text-white/30">
-              Deposit address
-            </p>
-            {deposit.data && (
-              <button
-                type="button"
-                onClick={copyToClipboard}
-                className="flex items-center gap-1 text-xs font-medium text-blue-600 transition-all hover:text-blue-700 active:scale-95 dark:text-blue-500"
-              >
-                {copied ? (
-                  <>
-                    <PiCheckBold className="text-green-500" />
-                    <span className="text-green-500 font-semibold">Copied!</span>
-                  </>
+              href="/settings/card"
+              icon={<PiCreditCardBold />}
+              title="Tapp Card"
+              subtitle={card.data ? "Manage your physical card" : "Link a card to tap and pay"}
+              trailing={
+                card.data ? (
+                  <StatusChip tone="success">Linked</StatusChip>
                 ) : (
-                  <>
-                    <PiCopyBold />
-                    <span>Copy</span>
-                  </>
-                )}
-              </button>
+                  <StatusChip>None</StatusChip>
+                )
+              }
+            />
+            {card.data && (
+              <SettingsRow
+                href="/settings/limits"
+                icon={<PiSlidersHorizontalBold />}
+                title="Spend limits"
+                subtitle="Daily, per tap, step-up threshold"
+              />
             )}
           </div>
-          <p
-            onClick={copyToClipboard}
-            className="cursor-pointer select-all break-all font-mono text-xs text-neutral-900 transition-colors hover:text-blue-600 dark:text-white/80 dark:hover:text-blue-400"
-            title="Click to copy"
-          >
-            {displayAddress || "—"}
-          </p>
-          <p className="text-xs text-gray-500 dark:text-white/50">
-            {deposit.data
-              ? `USDC on ${deposit.data.network}`
-              : deposit.isError
-                ? "Couldn't load your address"
-                : "Loading…"}
-          </p>
-        </div>
+        </section>
 
-        <div className="grid divide-y divide-dashed divide-gray-200 overflow-hidden rounded-3xl border border-gray-200 dark:divide-white/10 dark:border-white/10">
-          <SettingsRow
-            href="mailto:labs@zoracle.xyz"
-            icon={<PiQuestionBold />}
-            title="Help &amp; support"
-            subtitle="labs@zoracle.xyz"
-            external
+        <section className="grid gap-3">
+          <SectionHeader title="Account" />
+          <div className={listClasses}>
+            <SettingsRow
+              href="/holdings"
+              icon={<PiChartLineUpBold />}
+              title="Your shares"
+              subtitle="Businesses you own a slice of"
+            />
+            <SettingsRow
+              href="/settings/kyc"
+              icon={<PiIdentificationCardBold />}
+              title="Identity verification"
+              subtitle={
+                kyc.data?.next
+                  ? `Next: ${kyc.data.next.tier_name}`
+                  : kyc.data
+                    ? "Fully verified"
+                    : kyc.isError
+                      ? "Not available on this deployment"
+                      : "BVN and photo, raises your limits"
+              }
+              trailing={kyc.data ? <KycTierChip status={kyc.data} /> : <StatusChip>—</StatusChip>}
+            />
+            <SettingsRow
+              href="/settings/security"
+              icon={<PiLockKeyBold />}
+              title="Security"
+              subtitle="PIN, sign-out"
+            />
+          </div>
+        </section>
+
+        <section className="grid gap-3">
+          <SectionHeader
+            title="Deposit address"
+            action={
+              deposit.data ? (
+                <button
+                  type="button"
+                  onClick={copyToClipboard}
+                  className={cn(
+                    "focus-ring inline-flex items-center gap-1 rounded-sm text-xs font-medium transition-colors [&>svg]:size-3.5",
+                    copied ? "text-positive" : "text-accent hover:underline",
+                  )}
+                >
+                  {copied ? <PiCheckBold /> : <PiCopyBold />}
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              ) : null
+            }
           />
-          <button
-            type="button"
-            onClick={clear}
-            className="flex items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50 dark:hover:bg-white/5"
-          >
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-gray-50 text-rose-500 dark:bg-white/5">
-              <PiSignOutBold />
-            </span>
-            <div className="grid flex-1 gap-0.5">
-              <p className="font-medium text-rose-500">Sign out</p>
-              <p className="text-xs text-gray-500 dark:text-white/50">
-                Sign back in with Google to restore access.
-              </p>
-            </div>
-          </button>
-        </div>
+          <div className="panel grid gap-1.5 p-3">
+            <button
+              type="button"
+              onClick={copyToClipboard}
+              title="Copy address"
+              className="focus-ring break-all rounded-sm text-left font-mono text-xs leading-5 text-fg"
+            >
+              {displayAddress || "—"}
+            </button>
+            <p className="text-xs text-fg-muted">
+              {deposit.data
+                ? `USDC on ${deposit.data.network}`
+                : deposit.isError
+                  ? "Could not load your address"
+                  : "Loading"}
+            </p>
+          </div>
+        </section>
+
+        <section className="grid gap-3">
+          <SectionHeader title="Support" />
+          <div className={listClasses}>
+            <SettingsRow
+              href="mailto:labs@zoracle.xyz"
+              icon={<PiQuestionBold />}
+              title="Help and support"
+              subtitle="labs@zoracle.xyz"
+              external
+            />
+            <button
+              type="button"
+              onClick={clear}
+              className={cn(rowClasses, "focus-ring w-full text-left")}
+            >
+              <span className={cn(tileClasses, "text-negative")}>
+                <PiSignOutBold />
+              </span>
+              <span className="grid flex-1 gap-0.5">
+                <span className="text-sm font-medium text-negative-fg">Sign out</span>
+                <span className="text-xs text-fg-muted">Sign back in to restore access.</span>
+              </span>
+            </button>
+          </div>
+        </section>
       </AnimatedComponent>
     </Screen>
   );
@@ -205,36 +199,36 @@ function SettingsRow({
   icon,
   title,
   subtitle,
-  badge,
+  trailing,
   external,
 }: {
   href: string;
   icon: React.ReactNode;
   title: React.ReactNode;
   subtitle?: React.ReactNode;
-  badge?: React.ReactNode;
+  trailing?: React.ReactNode;
   external?: boolean;
 }) {
   const inner = (
-    <div className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-gray-50 dark:hover:bg-white/5">
-      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-gray-50 text-gray-500 dark:bg-white/5 dark:text-white/60">
-        {icon}
-      </span>
-      <div className="grid flex-1 gap-0.5">
-        <p className="font-medium text-neutral-900 dark:text-white">{title}</p>
-        {subtitle ? (
-          <p className="text-xs text-gray-500 dark:text-white/50">{subtitle}</p>
-        ) : null}
+    <div className={rowClasses}>
+      <span className={tileClasses}>{icon}</span>
+      <div className="grid min-w-0 flex-1 gap-0.5">
+        <p className="truncate text-sm font-medium text-fg">{title}</p>
+        {subtitle ? <p className="truncate text-xs text-fg-muted">{subtitle}</p> : null}
       </div>
-      {badge ?? <PiCaretRightBold className="text-gray-400 dark:text-white/40" />}
+      {trailing ?? <PiCaretRightBold className="size-3.5 text-fg-subtle" />}
     </div>
   );
   if (external) {
     return (
-      <a href={href} target="_blank" rel="noopener noreferrer">
+      <a href={href} target="_blank" rel="noopener noreferrer" className="focus-ring block">
         {inner}
       </a>
     );
   }
-  return <Link href={href}>{inner}</Link>;
+  return (
+    <Link href={href} className="focus-ring block">
+      {inner}
+    </Link>
+  );
 }

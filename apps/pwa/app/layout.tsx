@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { DM_Sans, Inter } from "next/font/google";
+import { Bricolage_Grotesque, DM_Sans, Inter } from "next/font/google";
 import "./globals.css";
 import { QueryProvider } from "@/lib/query-provider";
 import { SessionProvider } from "@/lib/auth";
@@ -15,6 +15,13 @@ import { CookieConsent } from "@/components/ui/CookieConsent";
 const inter = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
+});
+
+// Display face: balance, big numerals, page titles only.
+const bricolage = Bricolage_Grotesque({
+  variable: "--font-bricolage",
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
 });
 
 // Landing page + brand wordmark (the app body keeps Inter).
@@ -64,10 +71,10 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${dmSans.variable} h-full antialiased`}
+      className={`${inter.variable} ${bricolage.variable} ${dmSans.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full bg-[var(--surface)] text-[var(--fg)] transition-colors">
+      <body className="min-h-full bg-surface text-fg transition-colors">
         <ThemeProvider>
           <SessionProvider>
             <QueryProvider>

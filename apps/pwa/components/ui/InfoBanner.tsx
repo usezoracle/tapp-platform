@@ -1,37 +1,40 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { TbInfoSquareRounded } from "react-icons/tb";
+import { PiInfoBold } from "react-icons/pi";
 import { cn } from "@/lib/utils";
 
-type Tone = "info" | "warning";
+type Tone = "info" | "warning" | "error";
 
 interface InfoBannerProps {
   icon?: ReactNode;
   children: ReactNode;
   tone?: Tone;
+  /** Trailing action (a small button). */
+  action?: ReactNode;
   className?: string;
 }
 
 const toneClasses: Record<Tone, string> = {
-  info: "border-gray-200 bg-gray-50 text-gray-500 dark:border-white/10 dark:bg-white/5 dark:text-white/50",
-  warning:
-    "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-700/40 dark:bg-amber-900/10 dark:text-amber-300",
+  info:    "border-line bg-sunken text-fg-muted [&_svg]:text-fg-muted",
+  warning: "border-caution/30 bg-caution-wash text-caution-fg [&_svg]:text-caution",
+  error:   "border-negative/30 bg-negative-wash text-negative-fg [&_svg]:text-negative",
 };
 
-export function InfoBanner({ icon, children, tone = "info", className }: InfoBannerProps) {
+/** Inline notice. Hairline, 16px icon, 13px text. */
+export function InfoBanner({ icon, children, tone = "info", action, className }: InfoBannerProps) {
   return (
     <div
+      role={tone === "error" ? "alert" : undefined}
       className={cn(
-        "flex gap-2.5 rounded-xl border p-3 text-sm",
+        "flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-[13px] leading-5",
         toneClasses[tone],
         className,
       )}
     >
-      <span className="flex w-8 shrink-0 items-start justify-center pt-0.5 text-xl">
-        {icon ?? <TbInfoSquareRounded />}
-      </span>
-      <div className="flex-1 leading-relaxed">{children}</div>
+      <span className="mt-0.5 shrink-0 [&>svg]:size-4">{icon ?? <PiInfoBold />}</span>
+      <div className="min-w-0 flex-1">{children}</div>
+      {action ? <div className="shrink-0">{action}</div> : null}
     </div>
   );
 }

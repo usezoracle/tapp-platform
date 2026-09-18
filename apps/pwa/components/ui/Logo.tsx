@@ -30,7 +30,7 @@ export function Logo({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 text-xl font-bold italic tracking-tight text-neutral-900 dark:text-white",
+        "inline-flex items-center gap-1.5 text-xl font-bold italic tracking-tight text-fg",
         className,
       )}
       style={{ fontFamily: "var(--font-dm-sans), var(--font-sans)" }}

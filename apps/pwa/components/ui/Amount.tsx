@@ -3,11 +3,13 @@ import type { Money } from "@/lib/api";
 
 type Size = "hero" | "lg" | "md" | "sm";
 
+// The two large sizes use the display face; the two small ones stay in the
+// body face so a figure inside a row lines up with the text beside it.
 const SIZES: Record<Size, string> = {
-  hero: "text-[2.75rem] leading-none tracking-tight",
-  lg: "text-2xl leading-tight",
-  md: "text-base",
-  sm: "text-sm",
+  hero: "display text-[40px] leading-[44px]",
+  lg: "display text-2xl leading-7",
+  md: "text-sm font-medium",
+  sm: "text-sm font-medium",
 };
 
 interface AmountProps {
@@ -46,21 +48,17 @@ export function Amount({
 }: AmountProps) {
   if (!value) {
     return (
-      <span className={cn("tabular-nums text-[var(--fg-subtle)]", SIZES[size], className)}>
+      <span className={cn("tabular-nums text-fg-subtle", SIZES[size], className)}>
         —
       </span>
     );
   }
 
   const positive = value.minor > 0;
-  const tone = signed
-    ? positive
-      ? "text-[var(--positive)]"
-      : "text-[var(--fg)]"
-    : "text-[var(--fg)]";
+  const tone = signed ? (positive ? "text-positive" : "text-fg") : "text-fg";
 
   return (
-    <span className={cn("tabular-nums font-medium", SIZES[size], tone, className)}>
+    <span className={cn("tabular-nums", SIZES[size], tone, className)}>
       {signed && showPlus && positive ? "+" : ""}
       {value.display}
     </span>
@@ -75,7 +73,7 @@ export function CurrencyTag({ code, className }: { code: string; className?: str
   return (
     <span
       className={cn(
-        "rounded-md bg-[var(--sunken)] px-1.5 py-0.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-[var(--fg-muted)]",
+        "inline-flex h-5 items-center rounded-sm bg-sunken px-1.5 text-[11px] font-medium uppercase tracking-wide text-fg-muted",
         className,
       )}
     >

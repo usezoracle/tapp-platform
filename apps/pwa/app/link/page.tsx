@@ -175,7 +175,8 @@ function NoTokenState() {
               <Button
                 variant="primary"
                 onClick={startNfcScan}
-                className="mt-2.5 w-full py-2 text-xs"
+                size="sm"
+                className="mt-2.5 w-full"
               >
                 Scan with NFC
               </Button>

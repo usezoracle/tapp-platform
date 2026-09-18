@@ -262,8 +262,9 @@ function LocationGate({
         <p className="mt-1 text-xs leading-relaxed">{state.reason}</p>
         <Button
           variant="secondary"
+          size="sm"
           fullWidth={false}
-          className="mt-3 px-3 py-1.5 text-xs"
+          className="mt-3"
           onClick={onRequest}
         >
           Try again

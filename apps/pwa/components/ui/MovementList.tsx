@@ -11,7 +11,9 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Amount } from "./Amount";
 import { EmptyState } from "./Surface";
+import { listClasses, rowClasses, tileClasses } from "./Styles";
 import type { Movement } from "@/lib/ledger";
+import { equityLine, type EquityActivityItem } from "@/lib/holdings";
 
 /**
  * How a ledger reason reads to the person it happened to.
@@ -66,10 +68,17 @@ function describe(reason: string): { icon: ReactNode; label: string } {
 export function MovementList({
   movements,
   emptyState,
+  equityByRef,
   className,
 }: {
   movements: Movement[];
   emptyState?: ReactNode;
+  /**
+   * tap id → equity activity, from `indexEquityByTapId`. A tap row that
+   * earned shares says so on its second line. Optional: without it the list
+   * is exactly the ledger.
+   */
+  equityByRef?: Map<string, EquityActivityItem>;
   className?: string;
 }) {
   if (!movements.length) {
@@ -83,15 +92,34 @@ export function MovementList({
   }
 
   return (
-    <div className={cn("grid gap-1", className)}>
+    <div className={cn(listClasses, className)}>
       {movements.map((m) => (
-        <MovementRow key={m.id} movement={m} />
+        <MovementRow key={m.id} movement={m} equity={equityFor(m, equityByRef)} />
       ))}
     </div>
   );
 }
 
-function MovementRow({ movement }: { movement: Movement }) {
+/**
+ * The shares a tap earned, if this row is that tap.
+ *
+ * Joined by `refId`, which for a tap movement is the tap id the equity feed
+ * is keyed on. The fee row of the same tap carries the same id and is skipped:
+ * the shares were bought with the payment, not the fee, and naming them twice
+ * would read as twice the shares.
+ */
+function equityFor(
+  m: Movement,
+  byRef: Map<string, EquityActivityItem> | undefined,
+): EquityActivityItem | undefined {
+  if (!byRef || m.refType !== "tap" || !m.refId) return undefined;
+  const [base] = m.reason.split(":");
+  if (base === "tap.fee") return undefined;
+  return byRef.get(m.refId);
+}
+
+/** 48px row: quiet icon tile, label + when, right-aligned tabular amount. */
+function MovementRow({ movement, equity }: { movement: Movement; equity?: EquityActivityItem }) {
   const { icon, label } = describe(movement.reason);
   const incoming = movement.amount.minor > 0;
 
@@ -99,31 +127,27 @@ function MovementRow({ movement }: { movement: Movement }) {
   // from the escrow account's point of view. Marking it keeps somebody from
   // reading "money arrived" when what happened is "money was set aside".
   const held = movement.account === "escrow";
+  const shares = equityLine(equity);
 
   return (
-    <div className="flex items-center gap-3 rounded-2xl px-1 py-2.5">
-      <span
-        className={cn(
-          "grid h-9 w-9 shrink-0 place-items-center rounded-full text-base",
-          held
-            ? "bg-[var(--sunken)] text-[var(--fg-muted)]"
-            : incoming
-              ? "bg-[var(--positive-wash)] text-[var(--positive)]"
-              : "bg-[var(--sunken)] text-[var(--fg-muted)]",
-        )}
-      >
+    <div className={rowClasses}>
+      <span className={cn(tileClasses, incoming && !held && "text-positive")}>
         {held ? <PiLockSimpleBold /> : icon}
       </span>
 
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm text-[var(--fg)]">{label}</span>
-        <span className="block text-xs text-[var(--fg-subtle)]">
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className="truncate text-sm font-medium text-fg">{label}</span>
+        <span className="truncate text-xs text-fg-muted">
           {held ? "Held · " : ""}
           {when(movement.at)}
         </span>
+        {/* Its own line, not appended to the date: beside a right-aligned
+            amount there is not room for both, and "+0.125 MAMAPUT sha…" tells
+            nobody anything. */}
+        {shares ? <span className="truncate text-xs text-fg">{shares}</span> : null}
       </span>
 
-      <Amount value={movement.amount} size="sm" signed showPlus />
+      <Amount value={movement.amount} size="sm" signed showPlus className="shrink-0 text-right" />
     </div>
   );
 }

@@ -19,7 +19,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <>
       <Preloader />
       <Navbar />
-      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-mobile flex-col px-4 pt-28 pb-24">
+      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-mobile flex-col px-4 pt-20 pb-24">
         <main className="w-full flex-grow">{children}</main>
       </div>
       <Disclaimer />

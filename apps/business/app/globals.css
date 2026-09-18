@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+/*
+ * Tapp Business -- design tokens.
+ *
+ * The same foundation as the Tapp PWA: white ground, hairline borders, one
+ * accent (royal #0065f5), near-black primary button, Inter for text and
+ * Bricolage Grotesque for page titles and big numbers. Semantic tokens live
+ * on :root and flip with the OS colour scheme; `@theme inline` exposes them
+ * as Tailwind utilities (bg-ground, text-fg, border-line, ...).
+ */
+
+:root {
+  --ground:        #ffffff;
+  --surface:       #ffffff;
+  --tile:          #f4f4f5;
+  --tile-hover:    #f7f7f8;
+  --fg:            #18181b;
+  --fg-muted:      #6b6b72;
+  --fg-subtle:     #9a9aa1;
+  --line:          #ebebec;
+  --line-strong:   #d9d9dd;
+  --accent:        #0065f5;
+  --accent-fg:     #ffffff;
+  --accent-soft:   #e8f0fe;
+  --primary:       #18181b;
+  --primary-hover: #2a2a2f;
+  --primary-fg:    #ffffff;
+
+  --ok-bg:   #e4f5ea;  --ok-fg:   #14532d;  --ok-dot:   #1f9d55;
+  --warn-bg: #fdf1dc;  --warn-fg: #7a3e00;  --warn-dot: #e0891c;
+  --err-bg:  #fde8e8;  --err-fg:  #8a1c1c;  --err-dot:  #dc2626;
+  --pend-bg: #e8f0fe;  --pend-fg: #0b3f9c;  --pend-dot: #0065f5;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground:        #111113;
+    --surface:       #111113;
+    --tile:          #1c1c20;
+    --tile-hover:    #19191d;
+    --fg:            #f4f4f5;
+    --fg-muted:      #9c9ca4;
+    --fg-subtle:     #6c6c74;
+    --line:          #29292b;
+    --line-strong:   #3a3a3e;
+    --accent:        #3d8bff;
+    --accent-fg:     #ffffff;
+    --accent-soft:   #14243d;
+    --primary:       #ffffff;
+    --primary-hover: #e4e4e7;
+    --primary-fg:    #111113;
+
+    --ok-bg:   #12301e;  --ok-fg:   #9fe0b8;  --ok-dot:   #34c46f;
+    --warn-bg: #3a2708;  --warn-fg: #f3c98a;  --warn-dot: #f0a63c;
+    --err-bg:  #3c1414;  --err-fg:  #f4a6a6;  --err-dot:  #ef4444;
+    --pend-bg: #14243d;  --pend-fg: #a9c8ff;  --pend-dot: #3d8bff;
+
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-ground:        var(--ground);
+  --color-surface:       var(--surface);
+  --color-tile:          var(--tile);
+  --color-tile-hover:    var(--tile-hover);
+  --color-fg:            var(--fg);
+  --color-fg-muted:      var(--fg-muted);
+  --color-fg-subtle:     var(--fg-subtle);
+  --color-line:          var(--line);
+  --color-line-strong:   var(--line-strong);
+  --color-accent:        var(--accent);
+  --color-accent-fg:     var(--accent-fg);
+  --color-accent-soft:   var(--accent-soft);
+  --color-primary:       var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-fg:    var(--primary-fg);
+  --color-ok-bg:   var(--ok-bg);   --color-ok-fg:   var(--ok-fg);   --color-ok-dot:   var(--ok-dot);
+  --color-warn-bg: var(--warn-bg); --color-warn-fg: var(--warn-fg); --color-warn-dot: var(--warn-dot);
+  --color-err-bg:  var(--err-bg);  --color-err-fg:  var(--err-fg);  --color-err-dot:  var(--err-dot);
+  --color-pend-bg: var(--pend-bg); --color-pend-fg: var(--pend-fg); --color-pend-dot: var(--pend-dot);
+}
+
+@theme {
+  --font-sans:
+    var(--font-inter, system-ui), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display:
+    var(--font-bricolage, var(--font-inter, system-ui)), -apple-system, sans-serif;
+
+  /* Radii: 6 / 8 / 10. Nothing rounder except pills. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 10px;
+  --radius-2xl: 10px;
+  --radius-3xl: 10px;
+
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+html,
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  background: var(--ground);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+@utility focus-ring {
+  outline: none;
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+/* Uppercase 11px eyebrow, .06em tracking, muted. */
+@utility eyebrow {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* Page titles and big numbers, in Bricolage Grotesque. */
+@utility display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+/* Hairline-bordered panel. The only "card" in the system; never nested. */
+@utility panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+@utility skeleton {
+  background: var(--tile);
+  border-radius: var(--radius-sm);
+  animation: skeleton-fade 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-fade {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+}
+
+button {
+  cursor: pointer;
+}

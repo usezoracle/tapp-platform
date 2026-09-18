@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { PiSlidersHorizontalBold } from "react-icons/pi";
 import { Amount } from "./Amount";
-import { Surface } from "./Surface";
 import { formatMinor, type CardSummary } from "@/lib/api";
 
 interface Props {
@@ -28,64 +27,62 @@ export function CardAllowanceWidget({ card }: Props) {
   const bindingIsBalance = card.spendable.minor < headroomMinor;
 
   return (
-    <Surface radius="3xl" padding="md" className="grid gap-4">
+    <div className="panel grid gap-3 p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
-          Card spending today
-        </h3>
+        <h3 className="eyebrow">Card spend today</h3>
         <Link
           href="/settings/limits"
           aria-label="Edit limits"
-          className="text-base text-[var(--fg-subtle)] transition-colors hover:text-[var(--accent)]"
+          className="focus-ring -m-1 grid size-7 place-items-center rounded-sm text-fg-muted transition-colors hover:bg-sunken hover:text-fg [&>svg]:size-4"
         >
           <PiSlidersHorizontalBold />
         </Link>
       </div>
 
       <div className="grid gap-2">
-        <p className="font-medium tabular-nums text-[var(--fg)]">
-          <span className="text-2xl">{formatMinor(spent, "NGN")}</span>{" "}
-          <span className="text-sm text-[var(--fg-muted)]">
-            / {formatMinor(daily, "NGN")} today
+        <p className="flex items-baseline gap-1.5">
+          <span className="display text-2xl leading-7">{formatMinor(spent, "NGN")}</span>
+          <span className="text-[13px] tabular-nums text-fg-muted">
+            / {formatMinor(daily, "NGN")}
           </span>
         </p>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--sunken)]">
-          <div
-            className="h-full rounded-full bg-[var(--accent)] transition-all"
-            style={{ width: `${pct}%` }}
-          />
+        <div
+          role="progressbar"
+          aria-valuenow={Math.round(pct)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          className="h-1 w-full overflow-hidden rounded-full bg-sunken"
+        >
+          <div className="h-full rounded-full bg-accent transition-[width]" style={{ width: `${pct}%` }} />
         </div>
-        <p className="text-xs text-[var(--fg-muted)]">
+        <p className="text-xs text-fg-muted">
           {bindingIsBalance ? (
             <>
               You can spend <Amount value={card.spendable} size="sm" className="font-normal" />{" "}
-              — that&apos;s your balance, not your limit.
+              — that is your balance, not your limit.
             </>
           ) : (
             <>
-              {formatMinor(headroomMinor, "NGN")} left before today&apos;s limit.
+              {formatMinor(headroomMinor, "NGN")}{" "}left before today&apos;s limit.
             </>
           )}
         </p>
       </div>
 
-      <hr className="border-dashed border-[var(--line)]" />
-
-      <div className="flex items-start justify-between gap-4">
-        <div className="grid flex-1 gap-0.5">
-          <p className="text-xs text-[var(--fg-muted)]">Per-tap</p>
-          <p className="font-medium tabular-nums text-[var(--fg)]">
+      <dl className="grid grid-cols-2 divide-x divide-line border-t border-line pt-3">
+        <div className="grid gap-0.5 pr-3">
+          <dt className="text-xs text-fg-muted">Per tap</dt>
+          <dd className="text-sm font-medium tabular-nums text-fg">
             {formatMinor(card.per_tap_limit_subunit, "NGN")}
-          </p>
+          </dd>
         </div>
-        <div className="h-full w-px border border-dashed border-[var(--line)]" />
-        <div className="grid flex-1 gap-0.5">
-          <p className="text-xs text-[var(--fg-muted)]">Step-up above</p>
-          <p className="font-medium tabular-nums text-[var(--fg)]">
+        <div className="grid gap-0.5 pl-3">
+          <dt className="text-xs text-fg-muted">Step-up above</dt>
+          <dd className="text-sm font-medium tabular-nums text-fg">
             {formatMinor(card.step_up_threshold_subunit, "NGN")}
-          </p>
+          </dd>
         </div>
-      </div>
-    </Surface>
+      </dl>
+    </div>
   );
 }

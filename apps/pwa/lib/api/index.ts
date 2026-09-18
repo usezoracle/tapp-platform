@@ -17,5 +17,6 @@ export * from "./cash";
 export * from "./checkout";
 export * from "./convert";
 export * from "./deposits";
+export * from "./holdings";
 export * from "./kyc";
 export * from "./withdrawals";

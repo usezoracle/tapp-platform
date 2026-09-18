@@ -1,6 +1,6 @@
 "use client";
 
-import { PiWarningOctagonFill } from "react-icons/pi";
+import { PiWarningBold } from "react-icons/pi";
 import { InfoBanner } from "./InfoBanner";
 import { ApiError } from "@/lib/api";
 
@@ -25,8 +25,8 @@ export function apiMessage(error: unknown): string {
 /** A request that did not complete, in the server's words. */
 export function RequestFailure({ error }: { error: unknown }) {
   return (
-    <InfoBanner tone="warning" icon={<PiWarningOctagonFill className="text-amber-500" />}>
-      <p className="text-xs leading-relaxed">{apiMessage(error)}</p>
+    <InfoBanner tone="warning" icon={<PiWarningBold />}>
+      {apiMessage(error)}
     </InfoBanner>
   );
 }

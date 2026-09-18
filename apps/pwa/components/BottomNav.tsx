@@ -59,7 +59,7 @@ export function BottomNav() {
   return (
     <nav
       aria-label="Primary"
-      className="fixed inset-x-0 bottom-0 z-30 border-t border-[var(--line)] bg-[var(--surface)] transition-colors"
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface transition-colors"
     >
       <ul className="mx-auto flex w-full max-w-mobile items-end justify-between px-3 pt-2 pb-[max(env(safe-area-inset-bottom),0.5rem)]">
         {TABS.map((tab) =>
@@ -86,34 +86,34 @@ function RegularTab({ tab, pathname }: { tab: Tab; pathname: string }) {
         href={tab.href}
         aria-current={active ? "page" : undefined}
         onClick={() => haptic.light()}
-        className="flex flex-col items-center gap-1 py-1 touch-manipulation"
+        className="focus-ring flex flex-col items-center gap-1 rounded-md py-1 touch-manipulation"
       >
-        <span className="relative grid size-10 place-items-center">
+        <span className="relative grid h-8 w-12 place-items-center">
           {active && !reduced ? (
             <motion.span
               layoutId="bn-active-pill"
               transition={SPRINGS.default}
-              className="absolute inset-0 rounded-2xl bg-[var(--accent-wash)]"
+              className="absolute inset-0 rounded-md bg-accent-wash"
               aria-hidden
             />
           ) : null}
           {active && reduced ? (
             <span
               aria-hidden
-              className="absolute inset-0 rounded-2xl bg-[var(--accent-wash)]"
+              className="absolute inset-0 rounded-md bg-accent-wash"
             />
           ) : null}
           <Icon
             className={cn(
-              "relative z-10 text-2xl transition-colors",
-              active ? "text-[var(--accent)]" : "text-[var(--fg-subtle)]",
+              "relative z-10 size-5 transition-colors",
+              active ? "text-accent" : "text-fg-subtle",
             )}
           />
         </span>
         <span
           className={cn(
             "text-[11px] font-medium leading-none transition-colors",
-            active ? "text-[var(--fg)]" : "text-[var(--fg-subtle)]",
+            active ? "text-fg" : "text-fg-subtle",
           )}
         >
           {tab.label}
@@ -133,25 +133,23 @@ function ProminentTab({ tab, pathname }: { tab: Tab; pathname: string }) {
         href={tab.href}
         aria-current={active ? "page" : undefined}
         onClick={() => haptic.medium()}
-        className="flex flex-col items-center gap-1 py-1 touch-manipulation"
+        className="focus-ring flex flex-col items-center gap-1 rounded-md py-1 touch-manipulation"
       >
         <motion.span
           whileTap={{ scale: 0.9 }}
           transition={SPRINGS.tight}
-          className="relative grid size-10 place-items-center"
+          className="relative grid h-8 w-12 place-items-center"
         >
           <span
             aria-hidden
-            className="absolute inset-0 rounded-2xl bg-[var(--accent-wash)]"
+            className="absolute inset-0 rounded-md bg-accent-wash"
           />
-          <Icon
-            className="relative z-10 text-2xl text-[var(--accent)]"
-          />
+          <Icon className="relative z-10 size-5 text-accent" />
         </motion.span>
         <span
           className={cn(
             "text-[11px] font-medium leading-none transition-colors",
-            active ? "text-[var(--fg)]" : "text-[var(--fg-muted)]",
+            active ? "text-fg" : "text-fg-muted",
           )}
         >
           {tab.label}

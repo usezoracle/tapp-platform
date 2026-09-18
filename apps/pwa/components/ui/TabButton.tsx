@@ -17,10 +17,8 @@ export function TabButton({ active, onClick, children, disabled }: TabButtonProp
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "flex-1 rounded-full px-5 py-2.5 transition-all duration-300",
-        active
-          ? "border border-gray-300 bg-white text-neutral-900 shadow dark:border-white/20 dark:bg-transparent dark:text-white"
-          : "border border-transparent text-gray-400 dark:text-white/40",
+        "focus-ring h-8 flex-1 rounded-sm px-3 text-sm font-medium transition-colors",
+        active ? "bg-raised text-fg shadow-[0_0_0_1px_var(--line)]" : "text-fg-muted hover:text-fg",
         disabled && "cursor-not-allowed opacity-70",
       )}
     >
@@ -31,7 +29,7 @@ export function TabButton({ active, onClick, children, disabled }: TabButtonProp
 
 export function TabRow({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-center gap-2 rounded-full bg-gray-50 p-1 font-medium dark:bg-white/5">
+    <div className="flex items-center gap-1 rounded-md bg-sunken p-1">
       {children}
     </div>
   );

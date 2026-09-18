@@ -1,25 +1,27 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PiWarningOctagonFill } from "react-icons/pi";
-import { Screen } from "@/components/ui/Screen";
+import { PiWarningBold } from "react-icons/pi";
+import { Screen, SectionHeader } from "@/components/ui/Screen";
 import { Button } from "@/components/ui/Button";
 import { Balances, BalanceActions } from "@/components/ui/Balances";
 import { MovementList } from "@/components/ui/MovementList";
 import { InfoBanner } from "@/components/ui/InfoBanner";
 import { CardAllowanceWidget } from "@/components/ui/CardAllowanceWidget";
 import { NoCardBanner } from "@/components/ui/NoCardBanner";
-import { SectionLabel, Surface, EmptyState } from "@/components/ui/Surface";
+import { EmptyState } from "@/components/ui/Surface";
 import { CrossFade } from "@/components/ui/CrossFade";
-import {
-  AnimatedComponent,
-  slideInOut,
-} from "@/components/ui/AnimatedComponents";
+import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
+import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
 import { Web3Avatar } from "@/components/ui/Web3Avatar";
+import { SharesModule } from "@/components/holdings/SharesModule";
+import { linkClasses } from "@/components/ui/Styles";
+import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import { useBalances, useActivity, useCard } from "@/lib/ledger";
+import { useEquityActivity, indexEquityByTapId } from "@/lib/holdings";
 
 /**
  * The wallet, and the app's home screen.
@@ -34,6 +36,8 @@ export function WalletScreen() {
   const balances = useBalances();
   const activity = useActivity(6);
   const card = useCard();
+  const equity = useEquityActivity(100);
+  const equityByRef = useMemo(() => indexEquityByTapId(equity.data?.activity), [equity.data]);
 
   useEffect(() => {
     if (hydrated && !session) router.replace("/sign-in?next=/wallet");
@@ -43,41 +47,36 @@ export function WalletScreen() {
 
   return (
     <Screen>
-      <AnimatedComponent variant={slideInOut} className="grid gap-6 py-10">
+      <AnimatedComponent variant={slideInOut} className="grid gap-6 py-4">
         <header className="flex items-center gap-3">
-          <Web3Avatar address={session.email} size={42} />
-          <div className="grid gap-0.5">
-            <p className="text-xs text-[var(--fg-muted)]">Signed in as</p>
-            <p className="break-all text-sm font-medium text-[var(--fg)]">
-              {session.email}
-            </p>
-          </div>
+          <Web3Avatar address={session.email} size={32} />
+          <p className="min-w-0 flex-1 truncate text-[13px] text-fg-muted">{session.email}</p>
         </header>
 
         <CrossFade
           className="grid gap-6"
-          branchKey={
-            balances.isLoading
-              ? "loading"
-              : balances.isError
-                ? "error"
-                : "ready"
-          }
+          branchKey={balances.isLoading ? "loading" : balances.isError ? "error" : "ready"}
         >
           {balances.isLoading ? (
-            <div className="flex flex-col items-center gap-4 py-10">
-              <div className="loader" />
-              <p className="text-xs text-[var(--fg-subtle)]">Loading your balance…</p>
+            <div className="grid gap-6">
+              <div className="grid gap-2">
+                <Skeleton className="h-3 w-14" />
+                <Skeleton className="h-10 w-48" />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+              </div>
+              <SkeletonRows rows={3} />
             </div>
           ) : balances.isError ? (
             /* An unreadable balance is an error, never a zero. Its predecessor
                answered zero whenever the RPC provider was unreachable, so an
                outage and an empty account looked identical. */
-            <InfoBanner tone="warning" icon={<PiWarningOctagonFill className="text-amber-500" />}>
-              <p className="font-medium text-[var(--fg)]">
-                Couldn&apos;t load your balance
-              </p>
-              <p className="mt-1 text-xs">
+            <InfoBanner tone="error" icon={<PiWarningBold />}>
+              <p className="font-medium">Could not load your balance</p>
+              <p className="mt-0.5 text-xs">
                 {balances.error instanceof Error
                   ? balances.error.message
                   : "Try again in a moment."}
@@ -88,59 +87,55 @@ export function WalletScreen() {
               <Balances balances={balances.data ?? []} />
               <BalanceActions />
 
+              <SharesModule />
+
               {card.data === null ? <NoCardBanner /> : null}
               {card.data ? <CardAllowanceWidget card={card.data} /> : null}
 
               {card.data?.needs_resync ? (
-                <InfoBanner tone="warning" icon={<PiWarningOctagonFill className="text-amber-500" />}>
-                  <p className="font-medium text-[var(--fg)]">Card out of sync</p>
-                  <p className="mt-1 text-xs">
-                    A quick resync keeps it working at the counter.
-                  </p>
-                  <Link href="/cards/resync" className="mt-3 inline-block">
-                    <Button
-                      variant="secondary"
-                      fullWidth={false}
-                      className="px-3 py-1.5 text-xs"
-                    >
-                      Resync now
-                    </Button>
-                  </Link>
+                <InfoBanner
+                  tone="warning"
+                  icon={<PiWarningBold />}
+                  action={
+                    <Link href="/cards/resync" className="block">
+                      <Button variant="secondary" size="sm" fullWidth={false}>
+                        Resync
+                      </Button>
+                    </Link>
+                  }
+                >
+                  <p className="font-medium">Card out of sync</p>
+                  <p className="mt-0.5 text-xs">A quick resync keeps it working at the counter.</p>
                 </InfoBanner>
               ) : null}
 
-              <div className="grid gap-3">
-                <SectionLabel
+              <section className="grid gap-3">
+                <SectionHeader
+                  title="Recent activity"
                   action={
                     activity.data?.nextCursor ? (
-                      <Link
-                        href="/history"
-                        className="text-xs font-medium text-[var(--accent)]"
-                      >
+                      <Link href="/history" className={cn(linkClasses, "text-xs")}>
                         View all
                       </Link>
                     ) : undefined
                   }
-                >
-                  Recent activity
-                </SectionLabel>
+                />
 
                 {activity.isLoading ? (
-                  <Surface kind="sunken" radius="3xl" className="grid place-items-center py-8">
-                    <div className="loader" />
-                  </Surface>
+                  <SkeletonRows rows={3} />
                 ) : (
                   <MovementList
                     movements={activity.data?.movements ?? []}
+                    equityByRef={equityByRef}
                     emptyState={
                       <EmptyState title="No activity yet">
-                        Add cash through an agent, or receive USDC on Base, and
-                        it will show up here.
+                        Add cash through an agent, or receive USDC on Base, and it will show
+                        up here.
                       </EmptyState>
                     }
                   />
                 )}
-              </div>
+              </section>
             </>
           )}
         </CrossFade>

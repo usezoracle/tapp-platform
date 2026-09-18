@@ -18,8 +18,8 @@ export function Navbar() {
 
   if (!mounted) {
     return (
-      <header className="fixed left-0 top-0 z-20 w-full bg-white transition-all dark:bg-neutral-900">
-        <nav className="container mx-auto flex items-center justify-between p-4 lg:px-8">
+      <header className="fixed left-0 top-0 z-20 w-full border-b border-line bg-surface transition-colors">
+        <nav className="mx-auto flex h-14 w-full max-w-mobile items-center justify-between px-4">
           <Logo />
         </nav>
       </header>
@@ -30,24 +30,24 @@ export function Navbar() {
   const navVisible = isLoggedIn && shouldShowBottomNav(pathname);
 
   return (
-    <header className="fixed left-0 top-0 z-20 w-full bg-white transition-all dark:bg-neutral-900">
+    <header className="fixed left-0 top-0 z-20 w-full border-b border-line bg-surface transition-colors">
       <nav
         aria-label="Navbar"
-        className="container mx-auto flex items-center justify-between p-4 text-neutral-900 dark:text-white lg:px-8"
+        className="mx-auto flex h-14 w-full max-w-mobile items-center justify-between px-4 text-fg"
       >
-        <Link href={isLoggedIn ? "/" : "/sign-in"} className="flex items-center">
+        <Link href={isLoggedIn ? "/" : "/sign-in"} className="focus-ring flex items-center rounded-sm">
           <Logo />
         </Link>
-        <div className="flex items-center gap-3 text-sm">
+        <div className="flex items-center gap-2 text-sm">
           {/* When the bottom tab nav is visible it owns wallet-nav + sign-out
               (via the Settings tab → Security). Keep the navbar minimal so the
               two pieces of chrome don't duplicate. */}
           {isLoggedIn && !navVisible && (
             <Button
               variant="secondary"
+              size="sm"
               fullWidth={false}
               onClick={clear}
-              className="px-3 py-1.5 text-xs"
             >
               Sign out
             </Button>
