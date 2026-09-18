@@ -70,15 +70,18 @@ func TestLiveFreedomRoundTrip(t *testing.T) {
 			SharesInIssue: 800_000_000_000_000, PublicShares: 120_000_000_000_000,
 			Holders: 31, TreasuryUnits: 180_000_000_000_000,
 			BoardResolution: true, DirectorsClear: true,
+			// Fair value ₦320,000,000 over 8,000,000 shares: ₦40.00 a share.
+			NetAssetsKobo: 20_000_000_000, RevenueKobo: 12_000_000_000,
 		},
-		ReferencePriceKobo: 4000, SharesAuthorisedUnits: 1_000_000_000_000_000,
-		DailyReleaseUnits: 50_000_000_000_000, CofundBPS: 0, Holders: []Holder{},
+		SharesAuthorisedUnits: 1_000_000_000_000_000,
+		DailyReleaseUnits:     50_000_000_000_000, CofundBPS: 0, Holders: []Holder{},
 	})
 	if err != nil {
 		t.Fatalf("CreateBusiness: %v", err)
 	}
 	t.Logf("business: %s", dump(biz))
-	if biz.State != "listed" || biz.Symbol != symbol || biz.InstrumentID == "" || biz.ReferencePriceKobo != 4000 {
+	if biz.State != "listed" || biz.Symbol != symbol || biz.InstrumentID == "" || biz.ReferencePriceKobo != 4000 ||
+		biz.FairValueKobo != 32_000_000_000 {
 		t.Fatalf("business = %+v, want listed %s", biz, symbol)
 	}
 	if len(biz.Findings) != 7 {

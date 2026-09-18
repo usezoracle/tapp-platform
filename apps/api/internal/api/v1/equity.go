@@ -99,6 +99,34 @@ var (
 	symbolRe   = regexp.MustCompile(`^[A-Z][A-Z0-9]{2,11}$`)
 )
 
+// businessEvidence is the rail's Evidence as the app sends it: the same
+// counts and flags, with the two audited figures as money rather than kobo.
+type businessEvidence struct {
+	TradingMonths   int   `json:"trading_months"`
+	AuditedAccounts bool  `json:"audited_accounts"`
+	AuditorOnList   bool  `json:"auditor_on_list"`
+	SharesInIssue   int64 `json:"shares_in_issue"`
+	PublicShares    int64 `json:"public_shares"`
+	Holders         int   `json:"holders"`
+	TreasuryUnits   int64 `json:"treasury_units"`
+	BoardResolution bool  `json:"board_resolution"`
+	DirectorsClear  bool  `json:"directors_clear"`
+
+	// NetAssets and Revenue (trailing twelve months) are what the exchange
+	// prices the listing from. Required, NGN.
+	NetAssets money.Amount `json:"net_assets"`
+	Revenue   money.Amount `json:"revenue"`
+}
+
+func (e businessEvidence) rail() equity.Evidence {
+	return equity.Evidence{
+		TradingMonths: e.TradingMonths, AuditedAccounts: e.AuditedAccounts, AuditorOnList: e.AuditorOnList,
+		SharesInIssue: e.SharesInIssue, PublicShares: e.PublicShares, Holders: e.Holders,
+		TreasuryUnits: e.TreasuryUnits, BoardResolution: e.BoardResolution, DirectorsClear: e.DirectorsClear,
+		NetAssetsKobo: e.NetAssets.Minor(), RevenueKobo: e.Revenue.Minor(),
+	}
+}
+
 // businessRequest is the rail request minus the refs, which the API fills.
 type businessRequest struct {
 	LegalName   string `json:"legal_name"`
@@ -107,10 +135,11 @@ type businessRequest struct {
 	MCC         string `json:"mcc"`
 	Symbol      string `json:"symbol"`
 
-	Evidence equity.Evidence `json:"evidence"`
+	Evidence businessEvidence `json:"evidence"`
 
-	// ReferencePrice is money like everywhere else on this API; it is
-	// turned into kobo for the rail.
+	// ReferencePrice is optional: the exchange sets the listing price from
+	// the evidence and ignores a proposed one. Passed through in kobo when
+	// a caller still sends it.
 	ReferencePrice        money.Amount    `json:"reference_price"`
 	SharesAuthorisedUnits int64           `json:"shares_authorised_units"`
 	DailyReleaseUnits     int64           `json:"daily_release_units"`
@@ -153,13 +182,26 @@ func (r *businessRequest) validate() map[string]string {
 	if e.TreasuryUnits < 0 {
 		problems["evidence.treasury_units"] = "must not be negative"
 	}
-	switch {
-	case r.ReferencePrice.Currency() == "":
-		problems["reference_price"] = "required, as {minor, currency}"
-	case r.ReferencePrice.Currency() != money.NGN:
-		problems["reference_price"] = "must be in NGN"
-	case !r.ReferencePrice.IsPositive():
-		problems["reference_price"] = "must be greater than zero"
+	for field, amount := range map[string]money.Amount{
+		"evidence.net_assets": e.NetAssets, "evidence.revenue": e.Revenue,
+	} {
+		switch {
+		case amount.Currency() == "":
+			problems[field] = "required, as {minor, currency}, from the audited accounts"
+		case amount.Currency() != money.NGN:
+			problems[field] = "must be in NGN"
+		case !amount.IsPositive():
+			problems[field] = "must be greater than zero"
+		}
+	}
+	// Optional, and ignored by the exchange; only a nonsense value is refused.
+	if r.ReferencePrice.Currency() != "" {
+		switch {
+		case r.ReferencePrice.Currency() != money.NGN:
+			problems["reference_price"] = "must be in NGN"
+		case !r.ReferencePrice.IsPositive():
+			problems["reference_price"] = "must be greater than zero"
+		}
 	}
 	if r.SharesAuthorisedUnits < 0 {
 		problems["shares_authorised_units"] = "must not be negative"
@@ -193,8 +235,20 @@ type businessRecord struct {
 	Findings            []equity.Finding
 	InstrumentID        *string
 	ReferencePriceMinor int64
-	SubmittedAt         time.Time
-	DecidedAt           *time.Time
+	// Kobo, as submitted (net assets, revenue) and as answered (fair value).
+	// Zero when unknown: rows from before the figures were collected, and
+	// fair value on a rejection.
+	NetAssetsMinor int64
+	RevenueMinor   int64
+	FairValueMinor int64
+	SubmittedAt    time.Time
+	DecidedAt      *time.Time
+}
+
+// businessEvidenceView is the stored evidence, on GET and POST.
+type businessEvidenceView struct {
+	NetAssets money.Amount `json:"net_assets"`
+	Revenue   money.Amount `json:"revenue"`
 }
 
 // businessView is what both POST and GET answer.
@@ -208,10 +262,16 @@ type businessView struct {
 	State        string           `json:"state"` // submitted | listed | rejected
 	Findings     []equity.Finding `json:"findings"`
 	InstrumentID *string          `json:"instrument_id"`
-	// ReferencePrice is the admission price, from the stored record.
-	ReferencePrice money.Amount `json:"reference_price"`
-	SubmittedAt    time.Time    `json:"submitted_at"`
-	DecidedAt      *time.Time   `json:"decided_at"`
+	// Evidence is the audited figures the merchant submitted; FairValue is
+	// the valuation the exchange set from them, and ReferencePrice the
+	// listing price it named (fair value over the shares in issue). Any of
+	// them is null when not known: a rejected business has no price, and a
+	// business listed before the figures were collected has no evidence.
+	Evidence       businessEvidenceView `json:"evidence"`
+	FairValue      money.Amount         `json:"fair_value"`
+	ReferencePrice money.Amount         `json:"reference_price"`
+	SubmittedAt    time.Time            `json:"submitted_at"`
+	DecidedAt      *time.Time           `json:"decided_at"`
 
 	// Live is the market's cap table right now, or null when the market
 	// could not be reached (LiveError says why) or the business is not
@@ -295,7 +355,9 @@ func viewOf(r businessRecord) businessView {
 		SenderID: r.SenderID.String(), LegalName: r.LegalName, TradingName: r.TradingName,
 		RCNumber: r.RCNumber, MCC: r.MCC, Symbol: r.Symbol, State: r.State,
 		Findings: findings, InstrumentID: r.InstrumentID,
-		ReferencePrice: kobo(r.ReferencePriceMinor),
+		Evidence:       businessEvidenceView{NetAssets: koboOrNull(r.NetAssetsMinor), Revenue: koboOrNull(r.RevenueMinor)},
+		FairValue:      koboOrNull(r.FairValueMinor),
+		ReferencePrice: koboOrNull(r.ReferencePriceMinor),
 		SubmittedAt:    r.SubmittedAt, DecidedAt: r.DecidedAt,
 	}
 }
@@ -316,10 +378,13 @@ func (h *BusinessHandler) load(ctx context.Context, sender uuid.UUID) (businessR
 	)
 	err := h.Pool.QueryRow(ctx, `
 		SELECT sender_id, legal_name, trading_name, rc_number, mcc, symbol, state, findings,
-		       freedom_instrument_id, reference_price_minor, submitted_at, decided_at
+		       freedom_instrument_id, reference_price_minor,
+		       COALESCE(net_assets_minor, 0), COALESCE(revenue_minor, 0), COALESCE(fair_value_minor, 0),
+		       submitted_at, decided_at
 		  FROM merchant_businesses WHERE sender_id = $1`, sender).
 		Scan(&r.SenderID, &r.LegalName, &r.TradingName, &r.RCNumber, &r.MCC, &r.Symbol, &r.State,
-			&findings, &r.InstrumentID, &r.ReferencePriceMinor, &r.SubmittedAt, &r.DecidedAt)
+			&findings, &r.InstrumentID, &r.ReferencePriceMinor,
+			&r.NetAssetsMinor, &r.RevenueMinor, &r.FairValueMinor, &r.SubmittedAt, &r.DecidedAt)
 	if err != nil {
 		return r, err
 	}
@@ -365,7 +430,7 @@ func (h *BusinessHandler) Create(ctx *gin.Context) {
 	resp, err := h.Client.CreateBusiness(ctx.Request.Context(), equity.BusinessRequest{
 		MerchantRef: merchant.String(), CardholderRef: owner.String(),
 		LegalName: req.LegalName, TradingName: req.TradingName, RCNumber: req.RCNumber,
-		MCC: req.MCC, Symbol: req.Symbol, Evidence: req.Evidence,
+		MCC: req.MCC, Symbol: req.Symbol, Evidence: req.Evidence.rail(),
 		ReferencePriceKobo:    req.ReferencePrice.Minor(),
 		SharesAuthorisedUnits: req.SharesAuthorisedUnits,
 		DailyReleaseUnits:     req.DailyReleaseUnits,
@@ -382,7 +447,11 @@ func (h *BusinessHandler) Create(ctx *gin.Context) {
 		SenderID: merchant, LegalName: req.LegalName, TradingName: req.TradingName,
 		RCNumber: req.RCNumber, MCC: req.MCC, Symbol: req.Symbol,
 		State: "submitted", Findings: resp.Findings,
-		ReferencePriceMinor: req.ReferencePrice.Minor(), SubmittedAt: now,
+		ReferencePriceMinor: req.ReferencePrice.Minor(),
+		NetAssetsMinor:      req.Evidence.NetAssets.Minor(),
+		RevenueMinor:        req.Evidence.Revenue.Minor(),
+		FairValueMinor:      resp.FairValueKobo,
+		SubmittedAt:         now,
 	}
 	switch resp.State {
 	case "listed", "rejected":
@@ -395,6 +464,8 @@ func (h *BusinessHandler) Create(ctx *gin.Context) {
 	if resp.InstrumentID != "" {
 		record.InstrumentID = &resp.InstrumentID
 	}
+	// The exchange's price is the price. A proposed one is only kept when
+	// the exchange named none, which it never does for a listing.
 	if resp.ReferencePriceKobo > 0 {
 		record.ReferencePriceMinor = resp.ReferencePriceKobo
 	}
@@ -405,17 +476,21 @@ func (h *BusinessHandler) Create(ctx *gin.Context) {
 	if _, err := h.Pool.Exec(ctx, `
 		INSERT INTO merchant_businesses
 			(sender_id, legal_name, trading_name, rc_number, mcc, symbol, state, findings,
-			 freedom_instrument_id, reference_price_minor, submitted_at, decided_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			 freedom_instrument_id, reference_price_minor,
+			 net_assets_minor, revenue_minor, fair_value_minor, submitted_at, decided_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13::bigint, 0), $14, $15)
 		ON CONFLICT (sender_id) DO UPDATE
 		   SET legal_name = EXCLUDED.legal_name, trading_name = EXCLUDED.trading_name,
 		       rc_number = EXCLUDED.rc_number, mcc = EXCLUDED.mcc, symbol = EXCLUDED.symbol,
 		       state = EXCLUDED.state, findings = EXCLUDED.findings,
 		       freedom_instrument_id = EXCLUDED.freedom_instrument_id,
 		       reference_price_minor = EXCLUDED.reference_price_minor,
+		       net_assets_minor = EXCLUDED.net_assets_minor, revenue_minor = EXCLUDED.revenue_minor,
+		       fair_value_minor = EXCLUDED.fair_value_minor,
 		       submitted_at = EXCLUDED.submitted_at, decided_at = EXCLUDED.decided_at`,
 		record.SenderID, record.LegalName, record.TradingName, record.RCNumber, record.MCC,
 		record.Symbol, record.State, findings, record.InstrumentID, record.ReferencePriceMinor,
+		record.NetAssetsMinor, record.RevenueMinor, record.FairValueMinor,
 		record.SubmittedAt, record.DecidedAt); err != nil {
 		// The market has the listing; only our copy failed. Say so rather
 		// than let the merchant submit again and get the same record back.

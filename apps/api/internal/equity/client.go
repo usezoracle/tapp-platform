@@ -151,6 +151,11 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 // ------------------------------------------------------------ businesses
 
 // Evidence is what the listing rulebook is assessed against.
+//
+// NetAssetsKobo and RevenueKobo (trailing twelve months) come from the
+// audited accounts and are what Freedom prices the listing from: fair value
+// is net assets + 1.0× revenue, and the listing price is that over the
+// shares in issue. The applicant does not propose a price.
 type Evidence struct {
 	TradingMonths   int   `json:"trading_months"`
 	AuditedAccounts bool  `json:"audited_accounts"`
@@ -161,6 +166,8 @@ type Evidence struct {
 	TreasuryUnits   int64 `json:"treasury_units"`
 	BoardResolution bool  `json:"board_resolution"`
 	DirectorsClear  bool  `json:"directors_clear"`
+	NetAssetsKobo   int64 `json:"net_assets_kobo"`
+	RevenueKobo     int64 `json:"revenue_kobo"`
 }
 
 // Holder is a founder's allocation made at listing, from treasury.
@@ -183,7 +190,9 @@ type BusinessRequest struct {
 
 	Evidence Evidence `json:"evidence"`
 
-	ReferencePriceKobo    int64    `json:"reference_price_kobo"`
+	// ReferencePriceKobo is optional and ignored by Freedom, which sets the
+	// listing price itself from Evidence. Sent only when a caller gave one.
+	ReferencePriceKobo    int64    `json:"reference_price_kobo,omitempty"`
 	SharesAuthorisedUnits int64    `json:"shares_authorised_units"`
 	DailyReleaseUnits     int64    `json:"daily_release_units"`
 	CofundBPS             int      `json:"cofund_bps"`
@@ -198,12 +207,16 @@ type Finding struct {
 }
 
 // BusinessResponse is what POST /v1/rail/businesses answers.
+//
+// ReferencePriceKobo is the listing price the exchange set; FairValueKobo is
+// the company valuation it set it from. Both are zero on a rejection.
 type BusinessResponse struct {
 	Symbol             string    `json:"symbol"`
 	InstrumentID       string    `json:"instrument_id"`
 	State              string    `json:"state"` // listed | rejected
 	Findings           []Finding `json:"findings"`
 	ReferencePriceKobo int64     `json:"reference_price_kobo"`
+	FairValueKobo      int64     `json:"fair_value_kobo"`
 	TreasuryUnits      int64     `json:"treasury_units"`
 }
 

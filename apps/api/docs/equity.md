@@ -52,17 +52,28 @@ figure (`"0.203125"`).
   "evidence": { "trading_months": 30, "audited_accounts": true, "auditor_on_list": true,
                 "shares_in_issue": 800000000000000, "public_shares": 120000000000000,
                 "holders": 31, "treasury_units": 180000000000000,
-                "board_resolution": true, "directors_clear": true },
-  "reference_price": { "minor": 4000, "currency": "NGN" },
+                "board_resolution": true, "directors_clear": true,
+                "net_assets": { "minor": 20000000000, "currency": "NGN" },
+                "revenue": { "minor": 12000000000, "currency": "NGN" } },
   "shares_authorised_units": 1000000000000000, "daily_release_units": 50000000000000,
   "cofund_bps": 0,
   "holders": [ { "cardholder_ref": "<user uuid>", "units": 50000000000000, "label": "founder" } ] }
 ```
 
+The applicant does not propose a price. Freedom values the company from the
+audited accounts -- fair value = `net_assets` + 1.0× `revenue` (trailing
+twelve months) -- and the listing price is fair value divided by the shares
+in issue; the exchange names it and it comes back as `reference_price`. In
+the example, ₦200m + ₦120m = ₦320m over 8,000,000 shares is ₦40.00 a share.
+A `reference_price` in the request is accepted and forwarded for callers that
+have not caught up, but ignored by the exchange.
+
 Validation (400 with `data: {field: problem}`): `legal_name` required;
 `rc_number` `^(RC|BN)\d+$` (upper-cased); `symbol` `^[A-Z][A-Z0-9]{2,11}$`
-(upper-cased); evidence counts ≥ 0; `reference_price` NGN and > 0;
-`cofund_bps` 0..10000; holder refs must be user ids.
+(upper-cased); evidence counts ≥ 0; `evidence.net_assets` and
+`evidence.revenue` required, NGN and > 0 (as `{minor, currency}`);
+`reference_price`, if sent, NGN and > 0; `cofund_bps` 0..10000; holder refs
+must be user ids.
 
 `200` for both a listing and a rejection (the merchant needs the findings).
 `GET /v1/sender/me/business` answers the same shape (404 if never submitted):
@@ -71,7 +82,10 @@ Validation (400 with `data: {field: problem}`): `legal_name` required;
 { "sender_id": "…", "legal_name": "…", "trading_name": "…", "rc_number": "RC1483920",
   "mcc": "5812", "symbol": "MAMAPUT", "state": "listed | rejected | submitted",
   "findings": [ { "criterion": "free_float", "met": true, "detail": "15.0% ≥ 10%" } ],
-  "instrument_id": "… | null", "reference_price": {"minor":4000,"currency":"NGN","display":"₦40.00"},
+  "instrument_id": "… | null",
+  "evidence": { "net_assets": Amount | null, "revenue": Amount | null },
+  "fair_value": {"minor":32000000000,"currency":"NGN","display":"₦320,000,000.00"} | null,
+  "reference_price": {"minor":4000,"currency":"NGN","display":"₦40.00"} | null,
   "submitted_at": "2026-09-18T11:24:03Z", "decided_at": "… | null",
   "live": { "shares_authorised": {"units":…,"shares":"…"}, "in_issue": {…}, "treasury_remaining": {…},
             "released_today": {…}, "daily_release": {…}, "holders": 32,
@@ -81,6 +95,12 @@ Validation (400 with `data: {field: problem}`): `legal_name` required;
             "halted": false, "halt_reason": "…" } | null,
   "live_error": "… (only when live is null because Freedom could not be reached)" }
 ```
+
+`evidence` is the two audited figures as submitted; `fair_value` is the
+valuation the exchange set from them and `reference_price` the listing price
+it set. Each is `null` when not known: a rejected business has neither a fair
+value nor a price, and a business listed before the figures were collected
+has no `evidence`.
 
 `live` is only fetched for a `listed` business; it is `null` (and the stored
 record still answers) when Freedom is down.

@@ -148,8 +148,8 @@ const businessBody = `{
   "rc_number": "rc1483920", "mcc": "5812", "symbol": "mamaput",
   "evidence": {"trading_months": 30, "audited_accounts": true, "auditor_on_list": true,
     "shares_in_issue": 800000000000000, "public_shares": 120000000000000, "holders": 31,
-    "treasury_units": 180000000000000, "board_resolution": true, "directors_clear": true},
-  "reference_price": {"minor": 4000, "currency": "NGN"},
+    "treasury_units": 180000000000000, "board_resolution": true, "directors_clear": true,
+    "net_assets": {"minor": 20000000000, "currency": "NGN"}, "revenue": {"minor": 12000000000, "currency": "NGN"}},
   "shares_authorised_units": 1000000000000000, "daily_release_units": 50000000000000, "cofund_bps": 0
 }`
 
@@ -158,9 +158,11 @@ func TestABusinessIsListedStoredAndReadBackWithItsCapTable(t *testing.T) {
 	pool := equityTestPool(t)
 	profile, user := newMerchant(t, pool)
 	r := newFakeRail()
+	// Fair value = net assets + 1.0× revenue = ₦320,000,000; over 8,000,000
+	// shares in issue that is ₦40.00: the exchange names 4000 kobo.
 	r.on("POST", "/v1/rail/businesses", 201, `{"symbol":"MAMAPUT","instrument_id":"inst-1","state":"listed",
 		"findings":[{"criterion":"free_float","met":true,"detail":"15.0% ≥ 10%"}],
-		"reference_price_kobo":4000,"treasury_units":130000000000000}`)
+		"reference_price_kobo":4000,"fair_value_kobo":32000000000,"treasury_units":130000000000000}`)
 	r.on("GET", "/v1/rail/businesses/"+profile.String(), 200, `{"symbol":"MAMAPUT","instrument_id":"inst-1","state":"listed",
 		"findings":[],"reference_price_kobo":4000,"treasury_units":130000000000000,
 		"shares_authorised":1000000000000000,"in_issue":800000000000000,"treasury_remaining":130000000000000,
@@ -182,12 +184,25 @@ func TestABusinessIsListedStoredAndReadBackWithItsCapTable(t *testing.T) {
 	}
 	sent := r.got["POST /v1/rail/businesses"]
 	if sent["merchant_ref"] != profile.String() || sent["cardholder_ref"] != user.String() ||
-		sent["rc_number"] != "RC1483920" || sent["symbol"] != "MAMAPUT" ||
-		sent["reference_price_kobo"] != float64(4000) {
+		sent["rc_number"] != "RC1483920" || sent["symbol"] != "MAMAPUT" {
 		t.Errorf("forwarded %v", sent)
 	}
-	if _, has := sent["reference_price"]; has {
-		t.Errorf("money.Amount leaked onto the fakeRail: %v", sent)
+	// The audited figures go to the rail in kobo; no price is proposed.
+	evidence, _ := sent["evidence"].(map[string]any)
+	if evidence["net_assets_kobo"] != float64(20_000_000_000) || evidence["revenue_kobo"] != float64(12_000_000_000) ||
+		evidence["shares_in_issue"] != float64(800_000_000_000_000) {
+		t.Errorf("forwarded evidence %v", evidence)
+	}
+	if _, has := sent["reference_price_kobo"]; has {
+		t.Errorf("a price was proposed to the exchange: %v", sent)
+	}
+	for _, leak := range []string{"reference_price", "net_assets", "revenue"} {
+		if _, has := evidence[leak]; has {
+			t.Errorf("money.Amount %q leaked onto the fakeRail: %v", leak, sent)
+		}
+		if _, has := sent[leak]; has {
+			t.Errorf("money.Amount %q leaked onto the fakeRail: %v", leak, sent)
+		}
 	}
 
 	var view struct {
@@ -204,6 +219,21 @@ func TestABusinessIsListedStoredAndReadBackWithItsCapTable(t *testing.T) {
 			Currency string `json:"currency"`
 			Display  string `json:"display"`
 		} `json:"reference_price"`
+		Evidence struct {
+			NetAssets struct {
+				Minor   int64  `json:"minor"`
+				Display string `json:"display"`
+			} `json:"net_assets"`
+			Revenue struct {
+				Minor   int64  `json:"minor"`
+				Display string `json:"display"`
+			} `json:"revenue"`
+		} `json:"evidence"`
+		FairValue struct {
+			Minor    int64  `json:"minor"`
+			Currency string `json:"currency"`
+			Display  string `json:"display"`
+		} `json:"fair_value"`
 		DecidedAt *string `json:"decided_at"`
 		Live      *struct {
 			SharesAuthorised struct {
@@ -245,17 +275,30 @@ func TestABusinessIsListedStoredAndReadBackWithItsCapTable(t *testing.T) {
 		view.DecidedAt == nil {
 		t.Errorf("POST view = %s", env.Data)
 	}
+	checkFinancials := func(when string) {
+		t.Helper()
+		if view.Evidence.NetAssets.Minor != 20_000_000_000 || view.Evidence.NetAssets.Display != "₦200,000,000.00" ||
+			view.Evidence.Revenue.Minor != 12_000_000_000 || view.Evidence.Revenue.Display != "₦120,000,000.00" ||
+			view.FairValue.Minor != 32_000_000_000 || view.FairValue.Currency != "NGN" ||
+			view.FairValue.Display != "₦320,000,000.00" {
+			t.Errorf("%s financials = evidence %+v fair_value %+v", when, view.Evidence, view.FairValue)
+		}
+	}
+	checkFinancials("POST")
 
 	// Stored.
 	var state, symbol string
-	var priceMinor int64
+	var priceMinor, netAssets, revenue, fairValue int64
 	if err := pool.QueryRow(context.Background(),
-		`SELECT state, symbol, reference_price_minor FROM merchant_businesses WHERE sender_id = $1`, profile).
-		Scan(&state, &symbol, &priceMinor); err != nil {
+		`SELECT state, symbol, reference_price_minor, net_assets_minor, revenue_minor, fair_value_minor
+		   FROM merchant_businesses WHERE sender_id = $1`, profile).
+		Scan(&state, &symbol, &priceMinor, &netAssets, &revenue, &fairValue); err != nil {
 		t.Fatalf("not stored: %v", err)
 	}
-	if state != "listed" || symbol != "MAMAPUT" || priceMinor != 4000 {
-		t.Errorf("stored %s %s %d", state, symbol, priceMinor)
+	if state != "listed" || symbol != "MAMAPUT" || priceMinor != 4000 ||
+		netAssets != 20_000_000_000 || revenue != 12_000_000_000 || fairValue != 32_000_000_000 {
+		t.Errorf("stored %s %s price=%d net_assets=%d revenue=%d fair_value=%d",
+			state, symbol, priceMinor, netAssets, revenue, fairValue)
 	}
 
 	// Read back, merged with the live cap table.
@@ -264,6 +307,10 @@ func TestABusinessIsListedStoredAndReadBackWithItsCapTable(t *testing.T) {
 		t.Fatalf("GET = %d %s", code, env.Message)
 	}
 	decode(env.Data)
+	checkFinancials("GET")
+	if view.ReferencePrice.Minor != 4000 {
+		t.Errorf("GET reference_price = %+v", view.ReferencePrice)
+	}
 	if view.Live == nil {
 		t.Fatalf("GET has no live cap table: %s", env.Data)
 	}
@@ -300,15 +347,46 @@ func TestARejectedBusinessIsStoredWithItsFindings(t *testing.T) {
 	router.POST("/business", h.Create)
 	router.GET("/business", h.Get)
 
-	code, env := call(t, router, "POST", "/business", businessBody)
+	// A proposed price is still accepted and forwarded, for a caller that
+	// has not caught up; the exchange ignores it.
+	body := strings.Replace(businessBody, `"shares_authorised_units"`,
+		`"reference_price": {"minor": 9999, "currency": "NGN"}, "shares_authorised_units"`, 1)
+	code, env := call(t, router, "POST", "/business", body)
 	if code != 200 || !strings.Contains(string(env.Data), `"state":"rejected"`) ||
 		!strings.Contains(string(env.Data), `"met":false`) {
 		t.Errorf("POST = %d %s", code, env.Data)
 	}
+	if sent := r.got["POST /v1/rail/businesses"]; sent["reference_price_kobo"] != float64(9999) {
+		t.Errorf("proposed price not passed through: %v", sent)
+	}
 	code, env = call(t, router, "GET", "/business", "")
-	// Not listed: no cap table is asked for, and none is expected.
-	if code != 200 || !strings.Contains(string(env.Data), `"live":null`) {
+	// Not listed: no cap table is asked for, and none is expected. The
+	// exchange named no price and no fair value, so neither is invented.
+	if code != 200 || !strings.Contains(string(env.Data), `"live":null`) ||
+		!strings.Contains(string(env.Data), `"fair_value":null`) {
 		t.Errorf("GET = %d %s", code, env.Data)
+	}
+	if !strings.Contains(string(env.Data), `"net_assets":{"minor":20000000000`) {
+		t.Errorf("GET lost the submitted evidence: %s", env.Data)
+	}
+}
+
+func TestABusinessNeedNotProposeAPrice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pool := equityTestPool(t)
+	profile, _ := newMerchant(t, pool)
+	r := newFakeRail()
+	// The exchange sets the price and no price was proposed: the stored
+	// price is the exchange's, and none was stored before it answered.
+	r.on("POST", "/v1/rail/businesses", 200, `{"symbol":"MAMAPUT","state":"rejected","findings":[]}`)
+	h := &BusinessHandler{Pool: pool, Client: r.serve(t),
+		Merchant: func(*gin.Context) (uuid.UUID, bool) { return profile, true }}
+	router := gin.New()
+	router.POST("/business", h.Create)
+
+	code, env := call(t, router, "POST", "/business", businessBody)
+	if code != 200 || !strings.Contains(string(env.Data), `"reference_price":null`) {
+		t.Errorf("POST without a price = %d %s %s", code, env.Message, env.Data)
 	}
 }
 
@@ -321,16 +399,30 @@ func TestABusinessIsValidatedBeforeTheMarketSeesIt(t *testing.T) {
 	router.POST("/business", h.Create)
 
 	code, env := call(t, router, "POST", "/business", `{"legal_name":"", "rc_number":"12345", "symbol":"1abc",
-		"evidence":{"trading_months":-1}, "reference_price":{"minor":0,"currency":"NGN"}}`)
+		"evidence":{"trading_months":-1, "revenue":{"minor":0,"currency":"NGN"}}, "reference_price":{"minor":0,"currency":"NGN"}}`)
 	if code != 400 {
 		t.Fatalf("code = %d %s", code, env.Message)
 	}
 	var problems map[string]string
 	_ = json.Unmarshal(env.Data, &problems)
-	for _, field := range []string{"legal_name", "rc_number", "symbol", "evidence.trading_months", "reference_price"} {
+	for _, field := range []string{"legal_name", "rc_number", "symbol", "evidence.trading_months",
+		"evidence.net_assets", "evidence.revenue", "reference_price"} {
 		if problems[field] == "" {
 			t.Errorf("%s was not reported; got %v", field, problems)
 		}
+	}
+	// Absent is "required"; present but zero is "greater than zero"; the
+	// wrong currency is named. In plain words, for a form.
+	if !strings.Contains(problems["evidence.net_assets"], "required") ||
+		!strings.Contains(problems["evidence.revenue"], "greater than zero") {
+		t.Errorf("problems = %v", problems)
+	}
+	code, env = call(t, router, "POST", "/business", strings.Replace(businessBody,
+		`"revenue": {"minor": 12000000000, "currency": "NGN"}`, `"revenue": {"minor": 12000000000, "currency": "USD"}`, 1))
+	problems = nil
+	_ = json.Unmarshal(env.Data, &problems)
+	if code != 400 || problems["evidence.revenue"] != "must be in NGN" || len(problems) != 1 {
+		t.Errorf("USD revenue: %d %v", code, problems)
 	}
 	if len(r.got) != 0 {
 		t.Errorf("the market was called with an invalid request: %v", r.got)
