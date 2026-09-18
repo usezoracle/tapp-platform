@@ -146,6 +146,40 @@ export function formatDate(iso: string): string {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
+// -----------------------------------------------------------------------------
+// Chart time
+// -----------------------------------------------------------------------------
+
+const DAY = 86_400;
+
+/** How far back the charts look. */
+export const CHART_DAYS = 30;
+
+/** The chart's x-axis: the last 30 days, ending now, in UTC seconds. */
+export function chartFrame(now = nowSeconds()): { from: number; to: number } {
+  return { from: now - CHART_DAYS * DAY, to: now };
+}
+
+export const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+/** A session date "2026-11-04" as the UTC seconds of its midnight. */
+export function sessionSeconds(date: string): number {
+  return Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1, +date.slice(8, 10)) / 1000;
+}
+
+/** An ISO datetime as UTC seconds; NaN when unparseable. */
+export const isoSeconds = (iso: string) => Date.parse(iso) / 1000;
+
+/**
+ * A chart point's date. A time on a UTC midnight is a session date, shown
+ * as that date; a time of day is shown in the reader's own zone.
+ */
+export function formatPointDate(sec: number): string {
+  const d = new Date(sec * 1000);
+  const utc = sec % DAY === 0;
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", ...(utc ? { timeZone: "UTC" } : {}) });
+}
+
 /** "2026-11-04" → "4 Nov" — for chart axes and compact rows. */
 export function formatDayMonth(iso: string): string {
   const d = new Date(iso);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createChart,
   createSeriesMarkers,
@@ -8,33 +8,46 @@ import {
   ColorType,
   CrosshairMode,
   LineStyle,
+  TickMarkType,
+  type AreaData,
+  type AutoscaleInfo,
   type IChartApi,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type MouseEventParams,
   type Time,
+  type UTCTimestamp,
+  type WhitespaceData,
 } from "lightweight-charts";
 import { cn } from "@/lib/utils";
-import { formatDate, formatDayMonth } from "@/lib/holdings";
+import { formatPointDate } from "@/lib/holdings";
 
-/** One session: a calendar date and a value in major units. */
+/** One point: a UTC timestamp in seconds and a value in major units. */
 export interface ChartPoint {
-  /** YYYY-MM-DD. */
-  time: string;
+  time: number;
   value: number;
 }
 
 export interface ChartMarker {
-  time: string;
+  /** Must be a point's time. */
+  time: number;
   text?: string;
 }
 
+/** The span of time the x-axis covers, in UTC seconds. */
+export interface ChartFrame {
+  from: number;
+  to: number;
+}
+
 export interface LineChartProps {
-  /** Oldest first. */
+  /** Oldest first, strictly increasing times, all inside `frame`. */
   points: ChartPoint[];
-  /** For the axis. */
+  /** The x-axis covers this whole span, however few points there are. */
+  frame: ChartFrame;
+  /** Whole units, for gridlines that fall on whole units. */
   format: (value: number) => string;
-  /** For the tooltip, with the pence the axis leaves out. Defaults to `format`. */
+  /** With the pence: the tooltip, and gridlines that fall between whole units. Defaults to `format`. */
   formatExact?: (value: number) => string;
   /** Marks on the line, drawn as small discs below it. */
   markers?: ChartMarker[];
@@ -45,11 +58,21 @@ export interface LineChartProps {
   className?: string;
 }
 
+const HOUR = 3600;
+const DAY = 86_400;
+
 /**
  * The app's one chart: an area under a 2px accent line, on the page's own
  * ground. Everything it draws is read from the theme's CSS variables at
  * mount and again whenever `<html>` gains or loses `dark`, so it holds in
  * both themes without being told which one it is in.
+ *
+ * The frame is the chart, not the data: the x-axis is `frame` at an hour's
+ * resolution (whitespace bars, one an hour, that the points are placed
+ * among), so a single point sits at its own date on a full axis of dates,
+ * and an intraday point lands at its hour. The y-axis starts at 0 and ends
+ * at a round figure above the highest point, so the gridlines are whole
+ * amounts and the fill reaches the ground.
  *
  * lightweight-charts draws to a canvas, so this file is only ever loaded
  * on the client (the consumers import it through `next/dynamic`).
@@ -60,6 +83,7 @@ export interface LineChartProps {
  */
 export default function LineChart({
   points,
+  frame,
   format,
   formatExact = format,
   markers,
@@ -71,21 +95,14 @@ export default function LineChart({
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
-  const shownRef = useRef<ChartPoint[]>([]);
-  const formatRef = useRef(format);
-  formatRef.current = format;
+  const pointsRef = useRef<ChartPoint[]>(points);
+  pointsRef.current = points;
+  const formatRef = useRef({ format, formatExact });
+  formatRef.current = { format, formatExact };
 
   const [hover, setHover] = useState<{ x: number; index: number } | null>(null);
   const [dot, setDot] = useState<{ x: number; y: number } | null>(null);
   const [width, setWidth] = useState(0);
-
-  const byTime = useMemo(() => {
-    const m = new Map<string, number>();
-    points.forEach((p, i) => m.set(p.time, i));
-    return m;
-  }, [points]);
-  const byTimeRef = useRef(byTime);
-  byTimeRef.current = byTime;
 
   // Create once.
   useEffect(() => {
@@ -93,6 +110,11 @@ export default function LineChart({
     if (!el) return;
 
     const theme = readTheme(el);
+    // Whole units when every gridline is on one; the pence otherwise.
+    const labels = (values: number[]) => {
+      const f = formatRef.current;
+      return values.every(isWhole) ? values.map(f.format) : values.map(f.formatExact);
+    };
     const chart = createChart(el, {
       width: el.clientWidth,
       height: el.clientHeight,
@@ -109,7 +131,9 @@ export default function LineChart({
       },
       rightPriceScale: {
         borderVisible: false,
-        scaleMargins: { top: 0.14, bottom: 0.08 },
+        // No bottom margin: the range starts at 0 and 0 is the ground
+        // (the autoscale below leaves the "₦0" label its half-line).
+        scaleMargins: { top: 0.08, bottom: 0 },
         entireTextOnly: true,
       },
       timeScale: {
@@ -117,7 +141,14 @@ export default function LineChart({
         fixLeftEdge: true,
         fixRightEdge: true,
         lockVisibleTimeRangeOnResize: true,
-        tickMarkFormatter: (time: Time) => formatDayMonth(timeKey(time)),
+        // A month of hours on a phone is well under a pixel a bar.
+        minBarSpacing: 0.001,
+        tickMarkFormatter: (time: Time, type: TickMarkType) => {
+          const d = new Date(seconds(time) * 1000);
+          if (type === TickMarkType.Year) return String(d.getUTCFullYear());
+          if (type === TickMarkType.Month) return d.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
+          return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+        },
       },
       crosshair: {
         mode: CrosshairMode.Normal,
@@ -131,7 +162,8 @@ export default function LineChart({
       },
       localization: {
         locale: "en-NG",
-        priceFormatter: (v: number) => formatRef.current(v),
+        priceFormatter: (v: number) => labels([v])[0],
+        tickmarksPriceFormatter: labels,
       },
       handleScroll: false,
       handleScale: false,
@@ -150,21 +182,34 @@ export default function LineChart({
       crosshairMarkerBorderWidth: 2,
       crosshairMarkerBorderColor: theme.surface,
       crosshairMarkerBackgroundColor: theme.accent,
+      // Kobo is the smallest step, so no gridline is finer than 0.01 and
+      // two-decimal labels are always distinct.
+      priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+      autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
+        const info = original();
+        if (!info?.priceRange) return info;
+        return {
+          priceRange: { minValue: 0, maxValue: roundTop(info.priceRange.maxValue) },
+          // Half a line of text under 0, so its label is drawn whole; far
+          // too little for a gridline below 0 to fit.
+          margins: { above: 0, below: 6 },
+        };
+      },
     });
     const seriesMarkers = createSeriesMarkers(series, []);
 
     chartRef.current = chart;
     seriesRef.current = series;
     markersRef.current = seriesMarkers;
-    shownRef.current = [];
 
+    // The point in force under the cursor: the last one at or before it.
     const onMove = (param: MouseEventParams<Time>) => {
       if (!param.point || param.time === undefined) {
         setHover(null);
         return;
       }
-      const index = byTimeRef.current.get(timeKey(param.time));
-      if (index === undefined) {
+      const index = indexAtOrBefore(pointsRef.current, seconds(param.time));
+      if (index < 0) {
         setHover(null);
         return;
       }
@@ -180,7 +225,7 @@ export default function LineChart({
       chart.applyOptions({ width: w, height: h });
       chart.timeScale().fitContent();
       setWidth(w);
-      placeDot(chart, series, shownRef.current, setDot);
+      placeDot(chart, series, pointsRef.current, setDot);
     });
     ro.observe(el);
 
@@ -216,37 +261,17 @@ export default function LineChart({
     };
   }, []);
 
-  // Data. A newer last point is pushed with `update()`, so a live tick
-  // moves the line's end without redrawing the whole series; anything
-  // else (first load, a longer history, an edited past) is `setData()`.
+  // Data: the frame's hours as whitespace, with the points among them.
+  // A few hundred bars is nothing to the library, so every change is a
+  // plain `setData()` rather than a diff.
   useEffect(() => {
     const chart = chartRef.current;
     const series = seriesRef.current;
     if (!chart || !series) return;
-    const shown = shownRef.current;
-
-    const same = (a: ChartPoint, b: ChartPoint) => a.time === b.time && a.value === b.value;
-    const n = shown.length;
-    const appendedOne = points.length === n + 1 && n > 0 && same(points[n - 1], shown[n - 1]);
-    const movedLast = points.length === n && n > 0;
-    const prefixHolds = (upTo: number) => {
-      for (let i = 0; i < upTo; i++) if (!same(points[i], shown[i])) return false;
-      return true;
-    };
-
-    if (points.length === 0) {
-      series.setData([]);
-    } else if ((appendedOne || movedLast) && prefixHolds(n - 1)) {
-      if (!movedLast || !same(points[n - 1], shown[n - 1])) {
-        series.update(points[points.length - 1]);
-      }
-    } else {
-      series.setData(points);
-    }
-    shownRef.current = points;
+    series.setData(withFrame(points, frame));
     chart.timeScale().fitContent();
     placeDot(chart, series, points, setDot);
-  }, [points]);
+  }, [points, frame]);
 
   // Markers, in the accent.
   useEffect(() => {
@@ -256,7 +281,7 @@ export default function LineChart({
     const accent = readTheme(el).accent;
     m.setMarkers(
       (markers ?? []).map((mk) => ({
-        time: mk.time,
+        time: mk.time as UTCTimestamp,
         position: "belowBar",
         shape: "circle",
         color: accent,
@@ -300,7 +325,7 @@ export default function LineChart({
             transform: flip ? "translate(calc(-100% - 10px), 0)" : "translate(10px, 0)",
           }}
         >
-          <p className="tabular-nums opacity-70">{formatDate(tip.time)}</p>
+          <p className="tabular-nums opacity-70">{formatWhen(tip.time)}</p>
           <p className="font-medium tabular-nums">{formatExact(tip.value)}</p>
           {/* The sign carries the direction: a green or red on the ink
               ground would be the theme's light-mode tones on a dark one. */}
@@ -317,6 +342,70 @@ export default function LineChart({
   );
 }
 
+/**
+ * The frame's hours as whitespace bars, with the points placed among them
+ * by time. A point on an hour replaces that hour's whitespace; the result
+ * is sorted and strictly increasing, which is what `setData` requires.
+ */
+function withFrame(points: ChartPoint[], frame: ChartFrame): (AreaData<Time> | WhitespaceData<Time>)[] {
+  const out: (AreaData<Time> | WhitespaceData<Time>)[] = [];
+  let i = 0;
+  const pushPointsBefore = (t: number) => {
+    for (; i < points.length && points[i].time < t; i++) {
+      out.push({ time: points[i].time as UTCTimestamp, value: points[i].value });
+    }
+  };
+  for (let t = Math.ceil(frame.from / HOUR) * HOUR; t <= frame.to; t += HOUR) {
+    pushPointsBefore(t);
+    if (i < points.length && points[i].time === t) {
+      out.push({ time: t as UTCTimestamp, value: points[i].value });
+      i++;
+    } else {
+      out.push({ time: t as UTCTimestamp });
+    }
+  }
+  pushPointsBefore(Infinity);
+  return out;
+}
+
+/**
+ * A round figure above the highest value, so the top gridline is a whole
+ * amount and the line has headroom: ₦15.75 → ₦20, ₦70,000 → ₦80,000.
+ * Nothing (or nothing above 0) gets a ₦1 axis.
+ */
+export function roundTop(max: number): number {
+  if (!(max > 0)) return 1;
+  const raw = max * 1.1;
+  const step = niceStep(raw / 4);
+  return Math.ceil(raw / step) * step;
+}
+
+/** The smallest of 1, 2, 5 × 10ⁿ that is at least `x`. */
+function niceStep(x: number): number {
+  const exp = Math.pow(10, Math.floor(Math.log10(x)));
+  const f = x / exp;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * exp;
+}
+
+const isWhole = (v: number) => Math.abs(v - Math.round(v)) < 1e-6;
+
+/** The last index whose time is at or before `t`; -1 before the first. */
+function indexAtOrBefore(points: ChartPoint[], t: number): number {
+  let lo = 0;
+  let hi = points.length - 1;
+  let found = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].time <= t) {
+      found = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return found;
+}
+
 /** Where the newest point sits, once the chart has laid out. */
 function placeDot(
   chart: IChartApi,
@@ -330,19 +419,29 @@ function placeDot(
     return;
   }
   requestAnimationFrame(() => {
-    const x = chart.timeScale().timeToCoordinate(last.time);
+    const x = chart.timeScale().timeToCoordinate(last.time as UTCTimestamp);
     const y = series.priceToCoordinate(last.value);
     set(x === null || y === null ? null : { x, y });
   });
 }
 
-/** A lightweight-charts time back to the YYYY-MM-DD it was given as. */
-function timeKey(time: Time): string {
-  if (typeof time === "string") return time.slice(0, 10);
-  if (typeof time === "number") return new Date(time * 1000).toISOString().slice(0, 10);
-  const mm = String(time.month).padStart(2, "0");
-  const dd = String(time.day).padStart(2, "0");
-  return `${time.year}-${mm}-${dd}`;
+/** A lightweight-charts time back to UTC seconds. */
+function seconds(time: Time): number {
+  if (typeof time === "number") return time;
+  if (typeof time === "string") return Date.parse(time) / 1000;
+  return Date.UTC(time.year, time.month - 1, time.day) / 1000;
+}
+
+/**
+ * A point's moment for the tooltip. A point on a UTC midnight is a
+ * session, so its date alone; anything else happened at a time of day,
+ * shown in the reader's own clock.
+ */
+function formatWhen(sec: number): string {
+  const date = formatPointDate(sec);
+  if (sec % DAY === 0) return date;
+  const time = new Date(sec * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return `${date}, ${time}`;
 }
 
 function pct(ratio: number): string {

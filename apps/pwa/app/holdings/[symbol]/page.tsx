@@ -128,7 +128,7 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
 
               <Section
                 title="Price"
-                description="Adjusted price over the last 90 sessions."
+                description="Adjusted price over the last 30 days."
                 action={
                   h.last_session ? (
                     <span className="text-xs tabular-nums text-fg-muted">
