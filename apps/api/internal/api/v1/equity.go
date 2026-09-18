@@ -233,26 +233,34 @@ type sessionView struct {
 }
 
 type capTableView struct {
-	SharesAuthorised  units           `json:"shares_authorised"`
-	InIssue           units           `json:"in_issue"`
-	TreasuryRemaining units           `json:"treasury_remaining"`
-	ReleasedToday     units           `json:"released_today"`
-	DailyRelease      units           `json:"daily_release"`
-	Holders           int             `json:"holders"`
-	TopHolders        []topHolderView `json:"top_holders"`
-	PendingFunding    money.Amount    `json:"pending_funding"`
-	EscrowedFunding   money.Amount    `json:"escrowed_funding"`
-	ReferencePrice    money.Amount    `json:"reference_price"`
-	LastSession       *sessionView    `json:"last_session"`
-	Halted            bool            `json:"halted"`
-	HaltReason        string          `json:"halt_reason,omitempty"`
+	SharesAuthorised  units `json:"shares_authorised"`
+	InIssue           units `json:"in_issue"`
+	OnRegister        units `json:"on_register"`
+	TreasuryRemaining units `json:"treasury_remaining"`
+	// Price is what one share is valued at today; MarketCap is the shares in
+	// issue at that price — what the company is presently worth on the market.
+	Price           money.Amount    `json:"price"`
+	MarketCap       money.Amount    `json:"market_cap"`
+	ReleasedToday   units           `json:"released_today"`
+	DailyRelease    units           `json:"daily_release"`
+	Holders         int             `json:"holders"`
+	TopHolders      []topHolderView `json:"top_holders"`
+	PendingFunding  money.Amount    `json:"pending_funding"`
+	EscrowedFunding money.Amount    `json:"escrowed_funding"`
+	ReferencePrice  money.Amount    `json:"reference_price"`
+	LastSession     *sessionView    `json:"last_session"`
+	Halted          bool            `json:"halted"`
+	HaltReason      string          `json:"halt_reason,omitempty"`
 }
 
 func capTableOf(d *equity.BusinessDetail) *capTableView {
 	v := &capTableView{
 		SharesAuthorised:  unitsOf(d.SharesAuthorised),
 		InIssue:           unitsOf(d.InIssue),
+		OnRegister:        unitsOf(d.OnRegister),
 		TreasuryRemaining: unitsOf(d.TreasuryRemaining),
+		Price:             kobo(d.PriceKobo),
+		MarketCap:         kobo(d.MarketCapKobo),
 		ReleasedToday:     unitsOf(d.ReleasedToday),
 		DailyRelease:      unitsOf(d.DailyReleaseUnits),
 		Holders:           d.Holders,

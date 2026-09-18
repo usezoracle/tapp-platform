@@ -280,7 +280,10 @@ type BusinessDetail struct {
 
 	SharesAuthorised    int64       `json:"shares_authorised"`
 	InIssue             int64       `json:"in_issue"`
+	OnRegister          int64       `json:"on_register"`
 	TreasuryRemaining   int64       `json:"treasury_remaining"`
+	PriceKobo           int64       `json:"price_kobo"`
+	MarketCapKobo       int64       `json:"market_cap_kobo"`
 	ReleasedToday       int64       `json:"released_today"`
 	DailyReleaseUnits   int64       `json:"daily_release_units"`
 	Holders             int         `json:"holders"`

@@ -310,7 +310,10 @@ func TestAnOutageIsRetriedWithBackoffForever(t *testing.T) {
 	enqueue(t, pool, TapEvent{TapID: tapID, Cardholder: newUser(t, pool, "A", "B"), Merchant: uuid.New(),
 		Amount: money.Naira(10_000), At: time.Now()})
 
-	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	// The row was queued at the database's clock; the worker's frozen clock
+	// must sit after it or the row is never due. Microsecond precision is
+	// what timestamptz keeps, so the equality checks below stay exact.
+	now := time.Now().UTC().Add(time.Minute).Truncate(time.Microsecond)
 	w := &Worker{Pool: pool, Client: client, Now: func() time.Time { return now }}
 
 	for attempt := 1; attempt <= 12; attempt++ {
