@@ -3,39 +3,20 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import {
-  PiWalletFill,
-  PiClockCounterClockwiseBold,
-  PiMoneyWavyBold,
-  PiCreditCardBold,
-  PiGearSixBold,
-} from "react-icons/pi";
-import type { IconType } from "react-icons";
 import { cn } from "@/lib/utils";
+import { TAB_ITEMS, type NavItem } from "@/lib/nav";
 import { useSession } from "@/lib/auth";
 import { SPRINGS, useHaptic, useMotionPrefs } from "@/lib/motion";
 
-interface Tab {
-  href: string;
-  label: string;
-  icon: IconType;
-  match: (pathname: string) => boolean;
-  prominent?: boolean;
-}
+type Tab = NavItem;
 
-// Cash sits in the middle, and it is the prominent one.
-//
-// This is a naira product before it is a crypto one: the largest group of
-// people it is for hold physical notes and want them in a balance. Putting
-// that behind a settings menu, with a QR scanner in the prominent slot, had
-// the priorities exactly backwards.
-const TABS: Tab[] = [
-  { href: "/",              label: "Wallet",   icon: PiWalletFill,                match: (p) => p === "/" },
-  { href: "/history",       label: "Activity", icon: PiClockCounterClockwiseBold, match: (p) => p === "/history" },
-  { href: "/cash",          label: "Cash",     icon: PiMoneyWavyBold,             match: (p) => p.startsWith("/cash") || p.startsWith("/agents"), prominent: true },
-  { href: "/settings/card", label: "Card",     icon: PiCreditCardBold,            match: (p) => p === "/settings/card" || p.startsWith("/settings/limits") },
-  { href: "/settings",      label: "Settings", icon: PiGearSixBold,               match: (p) => (p === "/settings" || p.startsWith("/settings/")) && !p.startsWith("/settings/card") && !p.startsWith("/settings/limits") },
-];
+/**
+ * Pay sits in the middle and is the prominent one: it is the tab that
+ * gets used standing at a counter, with one hand. The labels and icons
+ * are the rail's own (lib/nav.ts), so a phone and a laptop name the same
+ * places the same way.
+ */
+const PROMINENT = "/pay";
 
 export function shouldShowBottomNav(pathname: string): boolean {
   if (pathname.startsWith("/demo-deck")) return false;
@@ -62,8 +43,8 @@ export function BottomNav() {
       className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface transition-colors md:hidden"
     >
       <ul className="mx-auto flex w-full max-w-mobile items-end justify-between px-3 pt-2 pb-[max(env(safe-area-inset-bottom),0.5rem)]">
-        {TABS.map((tab) =>
-          tab.prominent ? (
+        {TAB_ITEMS.map((tab) =>
+          tab.href === PROMINENT ? (
             <ProminentTab key={tab.href} tab={tab} pathname={pathname} />
           ) : (
             <RegularTab key={tab.href} tab={tab} pathname={pathname} />

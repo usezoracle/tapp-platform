@@ -157,13 +157,23 @@ function dayKey(iso: string): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
+/**
+ * Whole local days between then and now: 0 today, 1 yesterday. NaN for a
+ * date that does not parse, so a caller filtering on it drops the row.
+ */
+export function daysAgo(iso: string, now = new Date()): number {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return NaN;
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  return Math.round((startOf(now) - startOf(d)) / 86_400_000);
+}
+
 /** Today, Yesterday, then the date -- with the year once it is not this one. */
 function dayLabel(iso: string): string {
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return "Unknown day";
   const now = new Date();
-  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  const days = daysAgo(iso, now);
   if (days === 0) return "Today";
   if (days === 1) return "Yesterday";
   return d.toLocaleDateString("en-NG", {

@@ -5,17 +5,35 @@
  * app/globals.css (bg-surface, text-fg, border-line, …).
  */
 
+// Size (height, padding) is kept out of the base so a size can be chosen
+// without fighting it: with no class merger, "h-8" beside "h-10" resolves
+// by stylesheet order, not by which one was meant.
 const btnBase =
-  "focus-ring inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-medium transition-colors active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50";
+  "focus-ring inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors active:translate-y-px disabled:cursor-not-allowed disabled:opacity-50";
 
-/** Near-black in light, white in dark. The one loud button on a screen. */
-export const primaryBtnClasses = `${btnBase} bg-primary text-primary-fg hover:bg-primary-hover`;
+/** md is the default; sm for inline actions; lg for the thumb-pressed row on the wallet. */
+export const btnSizeClasses = {
+  md: "h-10 px-4 text-sm",
+  sm: "h-8 px-3 text-xs",
+  lg: "h-11 px-3 text-sm",
+} as const;
 
-export const secondaryBtnClasses = `${btnBase} border border-line bg-raised text-fg hover:bg-sunken`;
+export const btnVariantClasses = {
+  /** Near-black in light, white in dark. The one loud button on a screen. */
+  primary: `${btnBase} bg-primary text-primary-fg hover:bg-primary-hover`,
+  secondary: `${btnBase} border border-line bg-raised text-fg hover:bg-sunken`,
+  ghost: `${btnBase} bg-transparent text-fg hover:bg-sunken`,
+  danger: `${btnBase} bg-negative text-white hover:opacity-90`,
+} as const;
 
-export const ghostBtnClasses = `${btnBase} bg-transparent text-fg hover:bg-sunken`;
+/** Complete md buttons, for the places that render a button without <Button>. */
+export const primaryBtnClasses = `${btnVariantClasses.primary} ${btnSizeClasses.md}`;
 
-export const dangerBtnClasses = `${btnBase} bg-negative text-white hover:opacity-90`;
+export const secondaryBtnClasses = `${btnVariantClasses.secondary} ${btnSizeClasses.md}`;
+
+export const ghostBtnClasses = `${btnVariantClasses.ghost} ${btnSizeClasses.md}`;
+
+export const dangerBtnClasses = `${btnVariantClasses.danger} ${btnSizeClasses.md}`;
 
 export const inputClasses =
   "focus-ring h-10 w-full rounded-md border border-line bg-raised px-3 text-sm text-fg transition-colors placeholder:text-fg-subtle hover:border-line-strong focus:border-line-strong disabled:cursor-not-allowed disabled:bg-sunken";

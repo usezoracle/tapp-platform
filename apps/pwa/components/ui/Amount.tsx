@@ -1,11 +1,13 @@
 import { cn } from "@/lib/utils";
 import type { Money } from "@/lib/api";
 
-type Size = "hero" | "lg" | "md" | "sm";
+type Size = "headline" | "hero" | "lg" | "md" | "sm";
 
-// The two large sizes use the display face; the two small ones stay in the
+// The large sizes use the display face; the two small ones stay in the
 // body face so a figure inside a row lines up with the text beside it.
+// `headline` is the wallet's one big number: 36px on the phone, 40 from 768.
 const SIZES: Record<Size, string> = {
+  headline: "display text-4xl leading-10 md:text-[40px] md:leading-[44px]",
   hero: "display text-[40px] leading-[44px]",
   lg: "display text-2xl leading-7",
   md: "text-sm font-medium",

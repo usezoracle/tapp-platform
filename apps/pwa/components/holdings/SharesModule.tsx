@@ -10,7 +10,7 @@ import { listClasses, sectionLinkClasses } from "@/components/ui/Styles";
 import { cn } from "@/lib/utils";
 import type { Money } from "@/lib/api";
 import {
-  useHoldings,
+  type useHoldings,
   isFeatureDisabled,
   isExchangeDown,
   holdingsMessage,
@@ -20,18 +20,20 @@ import {
 import { HoldingRow } from "./HoldingRow";
 
 /**
- * "Your shares" on the home screen. Hidden entirely when the API says
- * the feature is off (404). Shows up to three holdings.
+ * "Your shares" on the home screen: at most three holdings, and the way
+ * to the rest. Hidden entirely when the API says the feature is off (404).
+ *
+ * The totals are not here -- they are the Shares tile in the Today strip
+ * above, and saying them twice on one screen made the module read as a
+ * second panel about the same number. `query` is the caller's, so the
+ * strip and this module are fed by one request and cannot disagree.
  */
-export function SharesModule() {
-  const q = useHoldings();
-
+export function SharesModule({ query: q }: { query: ReturnType<typeof useHoldings> }) {
   if (q.isError && isFeatureDisabled(q.error)) return null;
 
   return (
     <Section
       title="Your shares"
-      description="A slice of every business you tap at."
       action={
         q.data && q.data.holdings.length > 0 ? (
           <Link href="/holdings" className={sectionLinkClasses}>
@@ -40,9 +42,8 @@ export function SharesModule() {
         ) : null
       }
     >
-
       {q.isLoading ? (
-        <SkeletonRows rows={2} />
+        <SkeletonRows rows={3} />
       ) : q.isError ? (
         <InfoBanner
           tone={isExchangeDown(q.error) ? "warning" : "error"}
@@ -62,12 +63,11 @@ export function SharesModule() {
           {holdingsMessage(q.error)}
         </InfoBanner>
       ) : q.data && q.data.holdings.length === 0 ? (
-        <div className="panel px-4 py-5 text-[13px] leading-5 text-fg-muted">
+        <p className="text-[13px] leading-5 text-fg-muted">
           Every tap at a participating business earns you a slice of it. None yet.
-        </div>
+        </p>
       ) : q.data ? (
         <div className={listClasses}>
-          <PortfolioTotals value={q.data.total_value} cost={q.data.total_cost} />
           {q.data.holdings.slice(0, 3).map((h) => (
             <HoldingRow key={h.symbol} holding={h} />
           ))}
