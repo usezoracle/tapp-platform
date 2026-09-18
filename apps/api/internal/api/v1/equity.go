@@ -17,6 +17,7 @@ import (
 
 	"github.com/usezoracle/tapp/api/internal/equity"
 	"github.com/usezoracle/tapp/api/internal/money"
+	"github.com/usezoracle/tapp/api/storage"
 	u "github.com/usezoracle/tapp/api/utils"
 	"github.com/usezoracle/tapp/api/utils/logger"
 )
@@ -598,6 +599,15 @@ func (h *BusinessHandler) Holders(ctx *gin.Context) {
 type HoldingsHandler struct {
 	Client *equity.Client
 	User   func(*gin.Context) (uuid.UUID, bool)
+	// DB is the pool merchant names are read from; nil means storage.Pool.
+	DB *pgxpool.Pool
+}
+
+func (h *HoldingsHandler) db() *pgxpool.Pool {
+	if h.DB != nil {
+		return h.DB
+	}
+	return storage.Pool
 }
 
 type holdingSessionView struct {
@@ -740,9 +750,13 @@ func (h *HoldingsHandler) Get(ctx *gin.Context) {
 }
 
 type activityView struct {
-	TapID   string       `json:"tap_id"`
-	Symbol  *string      `json:"symbol"`
-	Funding money.Amount `json:"funding"`
+	TapID string `json:"tap_id"`
+	// Merchant is where the card was spent; TapAmount is the ticket, of which
+	// Funding is the slice that bought shares.
+	Merchant  merchantView `json:"merchant"`
+	Symbol    *string      `json:"symbol"`
+	TapAmount money.Amount `json:"tap_amount"`
+	Funding   money.Amount `json:"funding"`
 	// State: allocated | pending | escrowed.
 	State  string       `json:"state"`
 	Bought units        `json:"bought"`
@@ -750,7 +764,14 @@ type activityView struct {
 	At     string       `json:"at"`
 }
 
-// Activity is what the cardholder's taps have bought, newest first.
+// Activity is what the cardholder's taps have bought, newest first: one item
+// per tap, with the merchant named.
+//
+// Freedom names the merchant as it knows it. A merchant that took taps
+// before it listed is a placeholder there, named by its bare ref, so any
+// item whose name is missing or is just the ref is named from this side --
+// the business's trading name, else the person behind the profile -- in one
+// query for the page.
 //
 // GET /v1/me/equity-activity?limit=
 func (h *HoldingsHandler) Activity(ctx *gin.Context) {
@@ -772,16 +793,54 @@ func (h *HoldingsHandler) Activity(ctx *gin.Context) {
 		writeRailError(ctx, "activity", err)
 		return
 	}
+	// The merchants Freedom could not name, looked up here in one go.
+	var unnamed []uuid.UUID
+	for _, r := range rows {
+		if id, ok := unnamedMerchant(r); ok {
+			unnamed = append(unnamed, id)
+		}
+	}
+	local := map[uuid.UUID]merchantView{}
+	if len(unnamed) > 0 && h.db() != nil {
+		var err error
+		if local, err = merchantsBySender(ctx.Request.Context(), h.db(), unnamed); err != nil {
+			// A missing name is a poorer page, not a failed one.
+			logger.Errorf("equity activity: name merchants: %v", err)
+			local = map[uuid.UUID]merchantView{}
+		}
+	}
+
 	out := make([]activityView, 0, len(rows))
 	for _, r := range rows {
 		symbol := r.Symbol
 		if symbol != nil && *symbol == "" {
 			symbol = nil
 		}
+		m := merchantView{Ref: r.MerchantRef, Name: r.MerchantName, Symbol: symbol}
+		if id, ok := unnamedMerchant(r); ok {
+			if lm, found := local[id]; found {
+				m.Name = lm.Name
+			}
+		}
 		out = append(out, activityView{
-			TapID: r.TapRef, Symbol: symbol, Funding: kobo(r.FundingKobo), State: r.State,
+			TapID: r.TapRef, Merchant: m, Symbol: symbol, TapAmount: kobo(r.TapAmountKobo),
+			Funding: kobo(r.FundingKobo), State: r.State,
 			Bought: unitsOf(r.Units), Price: koboOrNull(r.PriceKobo), At: r.At,
 		})
 	}
 	u.APIResponse(ctx, http.StatusOK, "success", "Activity retrieved", gin.H{"activity": out})
+}
+
+// unnamedMerchant says whether Freedom's row needs naming from this side, and
+// by which sender id. A name that is blank or the bare ref is no name.
+func unnamedMerchant(r equity.ActivityRow) (uuid.UUID, bool) {
+	name := strings.TrimSpace(r.MerchantName)
+	if name != "" && name != r.MerchantRef {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(r.MerchantRef)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return id, true
 }

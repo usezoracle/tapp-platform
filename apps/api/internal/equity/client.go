@@ -481,15 +481,22 @@ func (c *Client) Holding(ctx context.Context, cardholderRef, symbol string) (*Ho
 	return &out, nil
 }
 
-// ActivityRow is one buyback intent, allocated or pending.
+// ActivityRow is one buyback intent, allocated or pending: one tap at one
+// merchant and what it bought.
 type ActivityRow struct {
-	TapRef      string  `json:"tap_ref"`
-	Symbol      *string `json:"symbol"`
-	FundingKobo int64   `json:"funding_kobo"`
-	State       string  `json:"state"`
-	Units       int64   `json:"units"`
-	PriceKobo   int64   `json:"price_kobo"`
-	At          string  `json:"at"`
+	TapRef string `json:"tap_ref"`
+	// MerchantRef is the merchant as Tapp named it to Freedom: the sender
+	// profile id. MerchantName is Freedom's trading name for it, which for a
+	// merchant that tapped before it listed is the bare ref.
+	MerchantRef   string  `json:"merchant_ref"`
+	MerchantName  string  `json:"merchant_name"`
+	Symbol        *string `json:"symbol"`
+	TapAmountKobo int64   `json:"tap_amount_kobo"`
+	FundingKobo   int64   `json:"funding_kobo"`
+	State         string  `json:"state"`
+	Units         int64   `json:"units"`
+	PriceKobo     int64   `json:"price_kobo"`
+	At            string  `json:"at"`
 }
 
 // ActivityResponse is GET /v1/rail/cardholders/{ref}/activity.

@@ -132,8 +132,28 @@ market and for offramps:
 `GET /v1/me/holdings/:symbol` → one holding as above plus
 `"lots": [ { "units", "shares", "cost": Amount, "acquired_at", "transferable_from", "tap_id": "… | null" } ]`
 and `"prices"` (Freedom's market-data array, passed through).
-`GET /v1/me/equity-activity?limit=` →
-`{ "activity": [ { "tap_id", "symbol": "… | null", "funding": Amount, "state": "allocated | pending | escrowed", "bought": {units,shares}, "price": Amount | null, "at": "…" } ] }`
+`GET /v1/me/equity-activity?limit=` → one item per tap, the merchant named:
+```json
+{ "activity": [ { "tap_id": "…",
+     "merchant": { "ref": "<sender profile id>", "name": "Mama Put", "symbol": "MAMAPUT | null" },
+     "symbol": "… | null", "tap_amount": Amount, "funding": Amount,
+     "state": "allocated | pending | escrowed", "bought": {units,shares},
+     "price": Amount | null, "at": "…" } ] }
+```
+`tap_amount` is the ticket; `funding` is the slice of it that bought shares.
+`merchant.name` is Freedom's trading name for the merchant. A merchant that
+took taps before it listed is a placeholder on Freedom, named by its bare
+ref, so any item whose name is empty or equals the ref is named from this
+side instead — `merchant_businesses.trading_name` (legal name if blank), else
+the sender user's first + last name — in one query for the whole page. A ref
+nobody knows keeps an empty name rather than a made-up one.
+
+`GET /v1/me/activity` (the ledger feed) carries the same shape on every
+movement whose `refType` is `"tap"`: `"merchant": { "ref", "name", "symbol" }`,
+resolved from `card_taps.merchant_id` in one extra query per page (collect the
+page's tap ids → sender ids → names), not one per row. Every other movement
+has `"merchant": null`. Here `symbol` is the business's ticker only while its
+listing is `listed`.
 
 Errors: `404` + message when the feature is off (`data` is an empty list for
 the list endpoints); `503` "The equity market is unreachable right now; try
