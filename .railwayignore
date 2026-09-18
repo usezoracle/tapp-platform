@@ -19,3 +19,5 @@ docs
 apps/api/.env
 apps/api/cdp-reissue
 apps/api/unsweep
+apps/business
+**/.next
