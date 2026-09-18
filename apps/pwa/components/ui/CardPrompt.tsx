@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { PiCreditCardBold } from "react-icons/pi";
+import { hueStyle } from "@/lib/nav";
 import { Button } from "./Button";
+import { DuotoneIcon } from "./DuotoneIcon";
 import { tileClasses } from "./Styles";
 
 /**
@@ -14,8 +15,8 @@ import { tileClasses } from "./Styles";
 export function CardPrompt() {
   return (
     <div className="panel flex items-center gap-3 p-3">
-      <span className={tileClasses}>
-        <PiCreditCardBold />
+      <span className={tileClasses} style={hueStyle("--nav-card")}>
+        <DuotoneIcon name="card" className="hue-text" />
       </span>
       <span className="grid min-w-0 flex-1 gap-0.5">
         <span className="text-sm font-medium text-fg">Link your Tapp Card</span>

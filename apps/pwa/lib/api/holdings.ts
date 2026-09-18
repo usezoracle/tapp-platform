@@ -90,6 +90,10 @@ export interface EquityActivityItem {
   bought: Quantity;
   price: Money | null;
   at: string;
+  /** The business tapped at, and its listing. */
+  merchant?: { ref: string; name: string; symbol: string } | null;
+  /** The whole tap the funding came out of. */
+  tap_amount?: Money;
 }
 
 export interface EquityActivityResponse {

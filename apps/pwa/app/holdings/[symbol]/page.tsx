@@ -61,7 +61,7 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
           title={h?.trading_name ?? symbol}
           back="/holdings"
           subtitle={h ? `${h.symbol} · ${h.legal_name}` : undefined}
-          trailing={h ? <SymbolTile name={h.trading_name} size="lg" /> : null}
+          trailing={h ? <SymbolTile name={h.trading_name} symbol={h.symbol} size="lg" /> : null}
         />
 
         {q.isLoading ? (
@@ -137,7 +137,7 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
                   ) : null
                 }
               >
-                <PriceChart prices={h.prices} currency={h.value.currency} />
+                <PriceChart prices={h.prices} currency={h.value.currency} lots={h.lots} />
               </Section>
             </div>
 

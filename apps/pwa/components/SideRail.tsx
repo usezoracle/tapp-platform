@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PiSignOutBold } from "react-icons/pi";
 import { cn } from "@/lib/utils";
-import { NAV_ITEMS } from "@/lib/nav";
+import { NAV_ITEMS, hueStyle } from "@/lib/nav";
+import { DuotoneIcon } from "@/components/ui/DuotoneIcon";
 import { useSession } from "@/lib/auth";
 import { TappMark } from "@/components/ui/Logo";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
@@ -17,7 +17,7 @@ import { Web3Avatar } from "@/components/ui/Web3Avatar";
  * way out. The places come from lib/nav.ts, shared with the tabs.
  */
 const itemClasses =
-  "focus-ring flex h-8 items-center gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors [&>svg]:size-4 [&>svg]:shrink-0";
+  "focus-ring flex h-8 items-center gap-2.5 rounded-md px-2 text-[13px] font-medium transition-colors [&>svg]:shrink-0";
 
 export function SideRail() {
   const pathname = usePathname() ?? "";
@@ -49,18 +49,20 @@ export function SideRail() {
       <nav className="mt-2 grid gap-px px-2">
         {NAV_ITEMS.map((item) => {
           const active = item.match(pathname);
-          const Icon = item.icon;
           return (
             <Link
               key={item.href}
               href={item.href}
               aria-current={active ? "page" : undefined}
+              style={hueStyle(item.hue)}
               className={cn(
                 itemClasses,
-                active ? "bg-sunken text-fg" : "text-fg-muted hover:bg-hover hover:text-fg",
+                active ? "hue-tint hue-text" : "text-fg-muted hover:bg-hover hover:text-fg",
               )}
             >
-              <Icon className={active ? "text-fg" : "text-fg-subtle"} />
+              {/* The glyph keeps its hue when the item is at rest, at 70%,
+                  and comes to full strength with the tint behind it. */}
+              <DuotoneIcon name={item.icon} size={18} className={cn("hue-text", !active && "opacity-70")} />
               {item.label}
             </Link>
           );
@@ -77,7 +79,7 @@ export function SideRail() {
           onClick={clear}
           className={cn(itemClasses, "-mx-1 text-fg-muted hover:bg-hover hover:text-fg")}
         >
-          <PiSignOutBold className="text-fg-subtle" />
+          <DuotoneIcon name="sign-out" size={18} className="text-fg-subtle" />
           Sign out
         </button>
       </div>

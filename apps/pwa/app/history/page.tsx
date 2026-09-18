@@ -9,7 +9,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { InfoBanner } from "@/components/ui/InfoBanner";
 import { EmptyState } from "@/components/ui/Surface";
-import { MovementList } from "@/components/ui/MovementList";
+import { MovementList, mergeFeed } from "@/components/ui/MovementList";
 import { SkeletonRows } from "@/components/ui/Skeleton";
 import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
 import { stackClasses } from "@/components/ui/Styles";
@@ -59,7 +59,8 @@ export default function HistoryPage() {
   const equity = useEquityActivity(200);
   const equityByRef = useMemo(() => indexEquityByTapId(equity.data?.activity), [equity.data]);
 
-  const movements = (pages.data ?? []).flatMap((p) => p.movements);
+  const movements = useMemo(() => (pages.data ?? []).flatMap((p) => p.movements), [pages.data]);
+  const feed = useMemo(() => mergeFeed(movements, equity.data?.activity), [movements, equity.data]);
   const next = pages.data?.[pages.data.length - 1]?.nextCursor;
 
   if (!hydrated || !session) return <Screen />;
@@ -91,7 +92,7 @@ export default function HistoryPage() {
         ) : (
           <>
             <MovementList
-              movements={movements}
+              items={feed}
               equityByRef={equityByRef}
               grouped
               emptyState={

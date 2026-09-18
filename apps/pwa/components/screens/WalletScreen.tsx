@@ -7,11 +7,12 @@ import { PiWarningBold } from "react-icons/pi";
 import { Screen, Section } from "@/components/ui/Screen";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
-import { BalanceHero, BalanceActions } from "@/components/ui/Balances";
-import { MovementList, daysAgo } from "@/components/ui/MovementList";
+import { BalanceHero, BalanceActions, type StatusLine } from "@/components/ui/Balances";
+import { MovementList, mergeFeed, daysAgo } from "@/components/ui/MovementList";
 import { InfoBanner } from "@/components/ui/InfoBanner";
 import { TodayStrip, cardTile, sharesTile, pendingTile, type Tile } from "@/components/ui/TodayStrip";
 import { CardPrompt } from "@/components/ui/CardPrompt";
+import { PortfolioChart } from "@/components/ui/PortfolioChart";
 import { EmptyState } from "@/components/ui/Surface";
 import { CrossFade } from "@/components/ui/CrossFade";
 import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
@@ -58,12 +59,14 @@ export function WalletScreen() {
   }, [hydrated, session, router]);
 
   const movements = activity.data?.movements ?? [];
+  // Money and the shares it bought, in one feed; the six most recent of
+  // either kind from today and yesterday.
   const recent = useMemo(
     () =>
-      (activity.data?.movements ?? [])
-        .filter((m) => daysAgo(m.at) <= RECENT_DAYS)
+      mergeFeed(activity.data?.movements ?? [], equity.data?.activity)
+        .filter((f) => daysAgo(f.at) <= RECENT_DAYS)
         .slice(0, RECENT_ROWS),
-    [activity.data],
+    [activity.data, equity.data],
   );
 
   // Money committed to a handover. One currency's worth is shown; two
@@ -132,7 +135,10 @@ export function WalletScreen() {
                 {firstUse ? (
                   <FirstUse />
                 ) : (
-                  <TodayStrip tiles={tiles} />
+                  <>
+                    <PortfolioChart />
+                    <TodayStrip tiles={tiles} />
+                  </>
                 )}
 
                 {card.data === null ? <CardPrompt /> : null}
@@ -162,7 +168,7 @@ export function WalletScreen() {
                   {activity.isLoading ? (
                     <SkeletonRows rows={3} />
                   ) : recent.length ? (
-                    <MovementList movements={recent} equityByRef={equityByRef} grouped />
+                    <MovementList items={recent} equityByRef={equityByRef} grouped />
                   ) : movements.length ? (
                     <p className="text-[13px] leading-5 text-fg-muted">
                       Nothing today or yesterday.
@@ -198,17 +204,19 @@ export function WalletScreen() {
  * right now. The limit and the balance are different constraints, and a
  * card is stopped by whichever binds first, so the line names that one.
  */
-function cardStatus(card: ReturnType<typeof useCard>): ReactNode {
-  if (card.isLoading) return <Skeleton className="h-3 w-44" />;
-  if (card.isError) return "Card status unavailable";
+function cardStatus(card: ReturnType<typeof useCard>): StatusLine {
+  if (card.isLoading) {
+    return { icon: "card", hue: "--nav-settings", text: <Skeleton className="h-3 w-44" /> };
+  }
+  if (card.isError) return { icon: "warning", hue: "--hue-amber", text: "Card status unavailable" };
   const c: CardSummary | null | undefined = card.data;
-  if (!c) return "No card linked";
-  if (c.needs_resync) return "Card needs a resync";
+  if (!c) return { icon: "link", hue: "--nav-settings", text: "No card linked" };
+  if (c.needs_resync) return { icon: "warning", hue: "--hue-amber", text: "Card needs a resync" };
   const headroom = Math.max(0, c.daily_limit_subunit - c.spent_today_subunit);
   if (c.spendable.minor < headroom) {
-    return `Your card can spend ${c.spendable.display} today`;
+    return { icon: "card", hue: "--nav-card", text: `Your card can spend ${c.spendable.display} today` };
   }
-  return `${formatMinor(headroom, "NGN")} left on your card today`;
+  return { icon: "card", hue: "--nav-card", text: `${formatMinor(headroom, "NGN")} left on your card today` };
 }
 
 /**
@@ -256,6 +264,11 @@ function WalletSkeleton() {
             <Skeleton className="h-11 w-full" />
             <Skeleton className="h-11 w-full" />
           </div>
+        </div>
+        <div className="grid gap-3">
+          <Skeleton className="h-3 w-24" />
+          <Skeleton className="h-7 w-40" />
+          <Skeleton className="h-40 w-full lg:h-[200px]" />
         </div>
         <div className="grid grid-cols-2 gap-2">
           {[0, 1].map((i) => (

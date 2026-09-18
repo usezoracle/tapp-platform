@@ -1,17 +1,13 @@
-import {
-  PiWalletBold,
-  PiClockCounterClockwiseBold,
-  PiQrCodeBold,
-  PiCreditCardBold,
-  PiChartLineUpBold,
-  PiGearSixBold,
-} from "react-icons/pi";
-import type { IconType } from "react-icons";
+import type { CSSProperties } from "react";
+import type { DuotoneName } from "@/components/ui/DuotoneIcon";
 
 export interface NavItem {
   href: string;
   label: string;
-  icon: IconType;
+  /** The duotone glyph, drawn in `hue` at 18px in the rail and 22px in the tabs. */
+  icon: DuotoneName;
+  /** The item's colour token in app/globals.css (`--nav-wallet`, …). */
+  hue: string;
   match: (pathname: string) => boolean;
 }
 
@@ -31,15 +27,23 @@ const isCard = (p: string) =>
  * app for; Pay and Card are the two ways money leaves; Holdings is what a
  * card earns; Settings last. The tabs drop Holdings -- five is the most
  * a thumb can tell apart -- and the shares module on the wallet links to it.
+ *
+ * Each has one hue, from the theme's semantic set (globals.css). The same
+ * hue is used wherever the same thing is meant elsewhere on a screen: a
+ * card tile is violet, a shares tile is green.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { href: "/",              label: "Wallet",   icon: PiWalletBold,                match: (p) => p === "/" || p === "/wallet" },
-  { href: "/history",       label: "Activity", icon: PiClockCounterClockwiseBold, match: (p) => p === "/history" },
-  { href: "/pay",           label: "Pay",      icon: PiQrCodeBold,                match: (p) => p === "/pay" },
-  { href: "/settings/card", label: "Card",     icon: PiCreditCardBold,            match: isCard },
-  { href: "/holdings",      label: "Holdings", icon: PiChartLineUpBold,           match: (p) => p.startsWith("/holdings") },
-  { href: "/settings",      label: "Settings", icon: PiGearSixBold,               match: (p) => (p === "/settings" || p.startsWith("/settings/")) && !isCard(p) },
+  { href: "/",              label: "Wallet",   icon: "wallet",   hue: "--nav-wallet",   match: (p) => p === "/" || p === "/wallet" },
+  { href: "/history",       label: "Activity", icon: "activity", hue: "--nav-activity", match: (p) => p === "/history" },
+  { href: "/pay",           label: "Pay",      icon: "qr",       hue: "--nav-pay",      match: (p) => p === "/pay" },
+  { href: "/settings/card", label: "Card",     icon: "card",     hue: "--nav-card",     match: isCard },
+  { href: "/holdings",      label: "Holdings", icon: "chart",    hue: "--nav-holdings", match: (p) => p.startsWith("/holdings") },
+  { href: "/settings",      label: "Settings", icon: "gear",     hue: "--nav-settings", match: (p) => (p === "/settings" || p.startsWith("/settings/")) && !isCard(p) },
 ];
 
 /** The five that fit under a thumb. */
 export const TAB_ITEMS: NavItem[] = NAV_ITEMS.filter((i) => i.href !== "/holdings");
+
+/** The inline style that hands an item's hue to the hue-* utilities. */
+export const hueStyle = (token: string): CSSProperties =>
+  ({ "--hue": `var(${token})` }) as CSSProperties;

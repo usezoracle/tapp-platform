@@ -7,13 +7,18 @@ import {
   PiLockSimpleBold,
   PiReceiptBold,
 } from "react-icons/pi";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { hueStyle } from "@/lib/nav";
 import { Amount } from "./Amount";
+import { CurrencyIcon } from "./CurrencyIcon";
+import { DuotoneIcon } from "./DuotoneIcon";
+import { StatusChip } from "./StatusChip";
 import { EmptyState } from "./Surface";
-import { listClasses, rowClasses, tileClasses } from "./Styles";
+import { listClasses, rowClasses, tileBaseClasses } from "./Styles";
 import type { Movement } from "@/lib/ledger";
-import { equityLine, type EquityActivityItem } from "@/lib/holdings";
+import { equityLine, formatShares, type EquityActivityItem } from "@/lib/holdings";
 
 /**
  * How a ledger reason reads to the person it happened to.
@@ -65,14 +70,43 @@ function describe(reason: string): { icon: ReactNode; label: string } {
   return { icon: domain.icon, label: EXACT[base] ?? domain.label };
 }
 
+/**
+ * One thing in the feed: a movement of money, or shares bought with one.
+ *
+ * The buyback is its own row rather than a line under the tap, because to
+ * the person it is its own event -- it lands minutes after the tap, at a
+ * price the tap did not know -- and a row is what an event gets. The tap
+ * row keeps its one-line note about the shares it earned; the note says
+ * what the tap did, the row says what happened next, and neither carries
+ * an amount the other also counts.
+ */
+export type FeedItem =
+  | { kind: "movement"; at: string; movement: Movement }
+  | { kind: "equity"; at: string; item: EquityActivityItem };
+
+/** The states that are an event. Queued has not started; failed says nothing (the tap still went through). */
+const ROW_STATES = new Set(["allocated", "pending", "escrowed", "reversed"]);
+
+/** Movements and buybacks in one list, newest first. */
+export function mergeFeed(
+  movements: Movement[],
+  equity: EquityActivityItem[] | undefined,
+): FeedItem[] {
+  const out: FeedItem[] = movements.map((movement) => ({ kind: "movement", at: movement.at, movement }));
+  for (const item of equity ?? []) {
+    if (ROW_STATES.has(item.state)) out.push({ kind: "equity", at: item.at, item });
+  }
+  return out.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
 export function MovementList({
-  movements,
+  items,
   emptyState,
   equityByRef,
   grouped = false,
   className,
 }: {
-  movements: Movement[];
+  items: FeedItem[];
   emptyState?: ReactNode;
   /**
    * tap id → equity activity, from `indexEquityByTapId`. A tap row that
@@ -88,7 +122,7 @@ export function MovementList({
   grouped?: boolean;
   className?: string;
 }) {
-  if (!movements.length) {
+  if (!items.length) {
     return (
       emptyState ?? (
         <EmptyState title="Nothing yet">
@@ -98,31 +132,28 @@ export function MovementList({
     );
   }
 
-  if (!grouped) {
-    return (
-      <div className={cn(listClasses, className)}>
-        {movements.map((m) => (
-          <MovementRow key={m.id} movement={m} equity={equityFor(m, equityByRef)} />
-        ))}
-      </div>
+  const row = (f: FeedItem, whenText?: string) =>
+    f.kind === "movement" ? (
+      <MovementRow
+        key={`m-${f.movement.id}`}
+        movement={f.movement}
+        equity={equityFor(f.movement, equityByRef)}
+        when={whenText}
+      />
+    ) : (
+      <EquityRow key={`e-${f.item.tap_id}`} item={f.item} when={whenText} />
     );
+
+  if (!grouped) {
+    return <div className={cn(listClasses, className)}>{items.map((f) => row(f))}</div>;
   }
 
   return (
     <div className={cn("grid gap-4", className)}>
-      {groupByDay(movements).map((group) => (
+      {groupByDay(items).map((group) => (
         <section key={group.key} className="grid gap-2">
           <h3 className="sticky-label eyebrow -mx-1 px-1 py-1">{group.label}</h3>
-          <div className={listClasses}>
-            {group.movements.map((m) => (
-              <MovementRow
-                key={m.id}
-                movement={m}
-                equity={equityFor(m, equityByRef)}
-                when={timeOfDay(m.at)}
-              />
-            ))}
-          </div>
+          <div className={listClasses}>{group.items.map((f) => row(f, timeOfDay(f.at)))}</div>
         </section>
       ))}
     </div>
@@ -132,21 +163,20 @@ export function MovementList({
 interface DayGroup {
   key: string;
   label: string;
-  movements: Movement[];
+  items: FeedItem[];
 }
 
 /**
- * Consecutive movements on the same local day. The list arrives newest
- * first, so a day's rows are already adjacent; this only draws the lines
- * between days.
+ * Consecutive items on the same local day. The feed is newest first, so a
+ * day's rows are already adjacent; this only draws the lines between days.
  */
-function groupByDay(movements: Movement[]): DayGroup[] {
+function groupByDay(items: FeedItem[]): DayGroup[] {
   const out: DayGroup[] = [];
-  for (const m of movements) {
-    const key = dayKey(m.at);
+  for (const f of items) {
+    const key = dayKey(f.at);
     const last = out[out.length - 1];
-    if (last && last.key === key) last.movements.push(m);
-    else out.push({ key, label: dayLabel(m.at), movements: [m] });
+    if (last && last.key === key) last.items.push(f);
+    else out.push({ key, label: dayLabel(f.at), items: [f] });
   }
   return out;
 }
@@ -208,6 +238,20 @@ function equityFor(
   return byRef.get(m.refId);
 }
 
+/**
+ * What a tap row says. With the merchant known, the title is where the
+ * card was used -- that is what somebody scanning the list is looking for
+ * -- and "Card payment" moves to the line under it. A refund of a tap
+ * (money back from a merchant) says so first, then where from.
+ */
+function tapTitle(m: Movement, label: string): { title: string; kind: string | null } {
+  const merchant = m.merchant;
+  const [base] = m.reason.split(":");
+  if (!merchant || base === "tap.fee") return { title: label, kind: null };
+  if (m.amount.minor > 0) return { title: `Refund · ${merchant.name}`, kind: "Card refund" };
+  return { title: merchant.name, kind: label };
+}
+
 /** 48px row: quiet icon tile, label + when, right-aligned tabular amount. */
 function MovementRow({
   movement,
@@ -227,18 +271,44 @@ function MovementRow({
   // reading "money arrived" when what happened is "money was set aside".
   const held = movement.account === "escrow";
   const shares = equityLine(equity);
+  const { title, kind } = tapTitle(movement, label);
+  const symbol = movement.merchant?.symbol ?? null;
+
+  // The tile's one colour says what kind of movement this is before the
+  // label does: green for money arriving, ink for money leaving, the
+  // holdings violet for a tap that also bought shares. Held money is
+  // neither in nor out and stays muted.
+  const tone = shares
+    ? "hue-text"
+    : held
+      ? "text-fg-muted"
+      : incoming
+        ? "text-positive"
+        : "text-fg";
 
   return (
     <div className={rowClasses}>
-      <span className={cn(tileClasses, incoming && !held && "text-positive")}>
-        {held ? <PiLockSimpleBold /> : icon}
+      {/* The currency sits on the tile's corner the way a status dot would,
+          so the movement's own glyph stays the primary mark. Absolute, so
+          the row keeps its 48px whatever the badge does. */}
+      <span className="relative shrink-0">
+        <span className={cn(tileBaseClasses, tone)} style={shares ? hueStyle("--nav-card") : undefined}>
+          {held ? <PiLockSimpleBold /> : icon}
+        </span>
+        <CurrencyIcon
+          currency={movement.amount.currency}
+          size={16}
+          className="absolute -right-1 -bottom-1 ring-[1.5px] ring-raised"
+        />
       </span>
 
       <span className="grid min-w-0 flex-1 gap-0.5">
-        <span className="truncate text-sm font-medium text-fg">{label}</span>
+        <span className="truncate text-sm font-medium text-fg">{title}</span>
         <span className="truncate text-xs text-fg-muted">
           {held ? "Held · " : ""}
+          {kind ? `${kind} · ` : ""}
           {whenText ?? when(movement.at)}
+          {kind && symbol ? ` · ${symbol}` : ""}
         </span>
         {/* Its own line, not appended to the date: beside a right-aligned
             amount there is not room for both, and "+0.125 MAMAPUT sha…" tells
@@ -248,6 +318,73 @@ function MovementRow({
 
       <Amount value={movement.amount} size="sm" signed showPlus className="shrink-0 text-right" />
     </div>
+  );
+}
+
+/**
+ * Shares bought with a tap, as a row of their own. The amount on the right
+ * is the funding -- the slice of the tap that became shares -- in the
+ * holdings violet and unsigned, since it is neither money in nor out of
+ * the balance: the tap row above already carries that.
+ */
+function EquityRow({ item, when: whenText }: { item: EquityActivityItem; when?: string }) {
+  const symbol = item.symbol ?? item.merchant?.symbol ?? null;
+  const n = formatShares(item.bought.shares);
+  const pending = item.state === "pending" || item.state === "escrowed";
+
+  const title =
+    item.state === "allocated"
+      ? `Bought ${n} ${symbol ?? ""} ${n === "1" ? "share" : "shares"}`.replace(/\s+/g, " ")
+      : item.state === "reversed"
+        ? `${symbol ?? "Your"} shares returned`
+        : `Buying ${symbol ?? ""} shares`.replace(/\s+/g, " ");
+
+  const from = item.tap_amount
+    ? `${item.funding.display} from your ${item.tap_amount.display} tap`
+    : `${item.funding.display} of your tap`;
+  const where = item.merchant ? ` at ${item.merchant.name}` : "";
+
+  const body = (
+    <div className={rowClasses} style={hueStyle("--nav-card")}>
+      <span className="relative shrink-0">
+        <span className={cn(tileBaseClasses, "hue-text")}>
+          <DuotoneIcon name="chart" />
+        </span>
+        <CurrencyIcon
+          currency={item.funding.currency}
+          size={16}
+          className="absolute -right-1 -bottom-1 ring-[1.5px] ring-raised"
+        />
+      </span>
+
+      <span className="grid min-w-0 flex-1 gap-0.5">
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-medium text-fg">{title}</span>
+          {pending ? <StatusChip tone="pending">pending</StatusChip> : null}
+        </span>
+        {/* A whole sentence; on a phone it takes two lines rather than
+            losing the merchant to an ellipsis. */}
+        <span className="text-xs leading-4 text-fg-muted [overflow-wrap:anywhere]">
+          {from}
+          {where} · {whenText ?? when(item.at)}
+        </span>
+      </span>
+
+      <span className="grid shrink-0 gap-0.5 text-right">
+        <span className="hue-text text-sm font-medium tabular-nums">{item.funding.display}</span>
+        {item.price ? (
+          <span className="text-xs tabular-nums text-fg-muted">@ {item.price.display}</span>
+        ) : null}
+      </span>
+    </div>
+  );
+
+  return symbol ? (
+    <Link href={`/holdings/${encodeURIComponent(symbol)}`} className="focus-ring block">
+      {body}
+    </Link>
+  ) : (
+    body
   );
 }
 

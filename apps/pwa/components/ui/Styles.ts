@@ -55,9 +55,12 @@ export const listClasses = "panel divide-y divide-line overflow-hidden";
 export const rowClasses =
   "flex min-h-12 items-center gap-3 px-3 py-2 transition-colors hover:bg-hover";
 
-/** 28px quiet tile holding a 16px icon. */
-export const tileClasses =
-  "grid size-7 shrink-0 place-items-center rounded-sm bg-sunken text-fg-muted [&>svg]:size-4";
+/** 28px quiet tile holding a 16px icon, before its colour: pair with a text-* class. */
+export const tileBaseClasses =
+  "grid size-7 shrink-0 place-items-center rounded-sm bg-sunken [&>svg]:size-4";
+
+/** The same tile in the default muted grey. */
+export const tileClasses = `${tileBaseClasses} text-fg-muted`;
 
 /** A section's action: "View all", "Manage". Right-aligned, accent, text only. */
 export const sectionLinkClasses = `${linkClasses} text-xs`;

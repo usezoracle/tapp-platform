@@ -40,7 +40,7 @@ export function HoldingRow({
         )}
       >
         <div className={cn("flex min-w-0 flex-1 items-center gap-3", table && "md:flex-none")}>
-          <SymbolTile name={holding.trading_name} />
+          <SymbolTile name={holding.trading_name} symbol={holding.symbol} />
           <div className="grid min-w-0 flex-1 gap-0.5 text-left">
             <p className="truncate text-sm font-medium text-fg">{holding.trading_name}</p>
             <p className="truncate text-xs tabular-nums text-fg-muted">

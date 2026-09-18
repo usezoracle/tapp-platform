@@ -2,10 +2,12 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { PiArrowDownLeftBold, PiMoneyWavyBold, PiQrCodeBold } from "react-icons/pi";
 import { cn } from "@/lib/utils";
+import { hueStyle } from "@/lib/nav";
 import { Amount } from "./Amount";
 import { Button } from "./Button";
+import { CurrencyIcon } from "./CurrencyIcon";
+import { DuotoneIcon, type DuotoneName } from "./DuotoneIcon";
 import { HOME_CURRENCY, useBalanceTotal } from "@/lib/ledger";
 import type { CurrencyBalance } from "@/lib/api";
 
@@ -30,6 +32,17 @@ import type { CurrencyBalance } from "@/lib/api";
  *
  * No box around any of it: the page is the container.
  */
+/**
+ * The status line's glyph and hue: a card line is the card's violet, a
+ * warning is amber, and "nothing linked" is slate -- the same colours
+ * the same things have in the rail.
+ */
+export interface StatusLine {
+  icon: DuotoneName;
+  hue: string;
+  text: ReactNode;
+}
+
 export function BalanceHero({
   balances,
   status,
@@ -37,7 +50,7 @@ export function BalanceHero({
 }: {
   balances: CurrencyBalance[];
   /** One line under the legs: the most useful true thing right now. */
-  status?: ReactNode;
+  status?: StatusLine | null;
   className?: string;
 }) {
   const total = useBalanceTotal();
@@ -63,8 +76,9 @@ export function BalanceHero({
           {parts.map((b) => (
             <div
               key={b.currency}
-              className="inline-flex h-6 items-center gap-1.5 rounded-sm bg-sunken px-2"
+              className="inline-flex h-6 items-center gap-1.5 rounded-sm bg-sunken px-1.5"
             >
+              <CurrencyIcon currency={b.currency} size={14} />
               <dt className="text-[11px] font-medium uppercase tracking-wide text-fg-muted">
                 {b.currency}
               </dt>
@@ -73,7 +87,12 @@ export function BalanceHero({
           ))}
         </dl>
       ) : null}
-      {status ? <p className="text-[13px] leading-5 text-fg-muted">{status}</p> : null}
+      {status ? (
+        <p className="flex items-center gap-1.5 text-[13px] leading-5 text-fg-muted">
+          <DuotoneIcon name={status.icon} size={16} className="hue-text shrink-0" style={hueStyle(status.hue)} />
+          <span className="min-w-0 flex-1">{status.text}</span>
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -94,21 +113,36 @@ export function BalanceActions() {
   // Receive goes to the chooser, not straight to a chain. Somebody adding
   // money has not yet decided whether they are handing over naira or sending
   // crypto, and sending them to one of the two answers is picking for them.
-  const icon = "whitespace-nowrap [&_svg]:size-4";
+  //
+  // The glyphs are duotone in the hue of the thing they lead to: cash and
+  // receiving are the wallet's royal, paying is Pay's royal. On the primary
+  // button the icon is drawn in the button's own text colour, since one
+  // hue on near-black is not legible.
+  const icon = "whitespace-nowrap";
   return (
     <div className="grid grid-cols-3 gap-2">
       <Link href="/cash" className="block">
-        <Button variant="primary" size="lg" leadingIcon={<PiMoneyWavyBold />} className={icon}>
+        <Button variant="primary" size="lg" leadingIcon={<DuotoneIcon name="cash" />} className={icon}>
           Cash in
         </Button>
       </Link>
       <Link href="/deposit" className="block">
-        <Button variant="secondary" size="lg" leadingIcon={<PiArrowDownLeftBold />} className={icon}>
+        <Button
+          variant="secondary"
+          size="lg"
+          leadingIcon={<DuotoneIcon name="arrow-in" className="hue-text" style={hueStyle("--nav-wallet")} />}
+          className={icon}
+        >
           Receive
         </Button>
       </Link>
       <Link href="/pay" className="block">
-        <Button variant="secondary" size="lg" leadingIcon={<PiQrCodeBold />} className={icon}>
+        <Button
+          variant="secondary"
+          size="lg"
+          leadingIcon={<DuotoneIcon name="qr" className="hue-text" style={hueStyle("--nav-pay")} />}
+          className={icon}
+        >
           Pay
         </Button>
       </Link>

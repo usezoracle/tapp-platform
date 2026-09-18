@@ -120,6 +120,28 @@
   --pending-wash: #e8f0fe;
   --pending-fg: #0b3f9c;
 
+  /* One hue per place to go, chosen from the semantic set above so the
+     six coloured icons read as a system: two royals (Wallet and Pay are
+     the balance and the way it is spent), a teal, a violet, a green and a
+     slate. Read through `--hue` on the item; see the nav-* utilities. */
+  --nav-wallet: #0065f5;
+  --nav-activity: #0e8a7a;
+  --nav-pay: #0065f5;
+  --nav-card: #6b3fc4;
+  --nav-holdings: #0d6b3f;
+  --nav-settings: #6b6f76;
+  --hue-amber: #9a5b12;
+  /* How much of a hue sits behind an active item: 10% on white. */
+  --hue-tint: 10%;
+
+  /* Six hues for the symbol tiles, assigned by hashing the symbol. */
+  --sym-1: #0065f5;
+  --sym-2: #0e8a7a;
+  --sym-3: #6b3fc4;
+  --sym-4: #0d6b3f;
+  --sym-5: #9a5b12;
+  --sym-6: #b3305a;
+
   /* The only shadow: sheets and tooltips that float above the page. */
   --shadow-sheet: 0 12px 32px -8px rgb(0 0 0 / 0.18), 0 0 0 1px var(--line);
 }
@@ -157,6 +179,22 @@
   --pending: #3d8bff;
   --pending-wash: #14243d;
   --pending-fg: #a9c8ff;
+
+  --nav-wallet: #7ea2ff;
+  --nav-activity: #4fc3b3;
+  --nav-pay: #7ea2ff;
+  --nav-card: #b08cff;
+  --nav-holdings: #4ade80;
+  --nav-settings: #a0a3a8;
+  --hue-amber: #e0a84f;
+  --hue-tint: 18%;
+
+  --sym-1: #7ea2ff;
+  --sym-2: #4fc3b3;
+  --sym-3: #b08cff;
+  --sym-4: #4ade80;
+  --sym-5: #e0a84f;
+  --sym-6: #f28ba8;
 
   --shadow-sheet: 0 12px 32px -8px rgb(0 0 0 / 0.6), 0 0 0 1px var(--line);
 }
@@ -267,6 +305,38 @@ body {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--raised);
+}
+
+/*
+ * Hue utilities. An element sets `--hue` (inline, to one of the nav-* or
+ * sym-* tokens) and these read it, so the light and dark values both hold
+ * without the element knowing which theme it is in.
+ *
+ *   hue-text   the hue itself: an icon, an active label, a tile's initials.
+ *   hue-tint   the hue behind an active nav item: 10% light, 18% dark.
+ *   hue-wash   the hue behind a symbol tile: 12% in both.
+ */
+@utility hue-text {
+  color: var(--hue);
+}
+@utility hue-tint {
+  background: color-mix(in srgb, var(--hue) var(--hue-tint), transparent);
+}
+@utility hue-wash {
+  background: color-mix(in srgb, var(--hue) 12%, transparent);
+}
+
+/* The ring that leaves the chart's newest point once a second. */
+@keyframes chart-pulse {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(3.2); opacity: 0; }
+}
+@utility chart-pulse {
+  animation: chart-pulse 1s ease-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 /* Quiet single-tone skeleton. */

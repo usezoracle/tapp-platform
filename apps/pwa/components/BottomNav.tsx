@@ -4,7 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { TAB_ITEMS, type NavItem } from "@/lib/nav";
+import { TAB_ITEMS, hueStyle, type NavItem } from "@/lib/nav";
+import { DuotoneIcon } from "@/components/ui/DuotoneIcon";
 import { useSession } from "@/lib/auth";
 import { SPRINGS, useHaptic, useMotionPrefs } from "@/lib/motion";
 
@@ -59,7 +60,6 @@ function RegularTab({ tab, pathname }: { tab: Tab; pathname: string }) {
   const active = tab.match(pathname);
   const haptic = useHaptic();
   const { reduced } = useMotionPrefs();
-  const Icon = tab.icon;
 
   return (
     <li className="flex-1">
@@ -67,34 +67,34 @@ function RegularTab({ tab, pathname }: { tab: Tab; pathname: string }) {
         href={tab.href}
         aria-current={active ? "page" : undefined}
         onClick={() => haptic.light()}
+        style={hueStyle(tab.hue)}
         className="focus-ring flex flex-col items-center gap-1 rounded-md py-1 touch-manipulation"
       >
         <span className="relative grid h-8 w-12 place-items-center">
+          {/* The tile behind the active glyph takes the item's own hue; the
+              sliding pill is one element carried between tabs, and the
+              colour on it changes with the tab it lands on. */}
           {active && !reduced ? (
             <motion.span
               layoutId="bn-active-pill"
               transition={SPRINGS.default}
-              className="absolute inset-0 rounded-md bg-accent-wash"
+              className="hue-tint absolute inset-0 rounded-md"
               aria-hidden
             />
           ) : null}
           {active && reduced ? (
-            <span
-              aria-hidden
-              className="absolute inset-0 rounded-md bg-accent-wash"
-            />
+            <span aria-hidden className="hue-tint absolute inset-0 rounded-md" />
           ) : null}
-          <Icon
-            className={cn(
-              "relative z-10 size-5 transition-colors",
-              active ? "text-accent" : "text-fg-subtle",
-            )}
+          <DuotoneIcon
+            name={tab.icon}
+            size={22}
+            className={cn("hue-text relative z-10 transition-opacity", !active && "opacity-70")}
           />
         </span>
         <span
           className={cn(
             "text-[11px] font-medium leading-none transition-colors",
-            active ? "text-fg" : "text-fg-subtle",
+            active ? "hue-text" : "text-fg-subtle",
           )}
         >
           {tab.label}
@@ -107,13 +107,13 @@ function RegularTab({ tab, pathname }: { tab: Tab; pathname: string }) {
 function ProminentTab({ tab, pathname }: { tab: Tab; pathname: string }) {
   const active = tab.match(pathname);
   const haptic = useHaptic();
-  const Icon = tab.icon;
   return (
     <li className="flex-1">
       <Link
         href={tab.href}
         aria-current={active ? "page" : undefined}
         onClick={() => haptic.medium()}
+        style={hueStyle(tab.hue)}
         className="focus-ring flex flex-col items-center gap-1 rounded-md py-1 touch-manipulation"
       >
         <motion.span
@@ -121,16 +121,15 @@ function ProminentTab({ tab, pathname }: { tab: Tab; pathname: string }) {
           transition={SPRINGS.tight}
           className="relative grid h-8 w-12 place-items-center"
         >
-          <span
-            aria-hidden
-            className="absolute inset-0 rounded-md bg-accent-wash"
-          />
-          <Icon className="relative z-10 size-5 text-accent" />
+          {/* Always tinted: this is the tab pressed at a counter, and it
+              stays findable from any screen. */}
+          <span aria-hidden className="hue-tint absolute inset-0 rounded-md" />
+          <DuotoneIcon name={tab.icon} size={22} className="hue-text relative z-10" />
         </motion.span>
         <span
           className={cn(
             "text-[11px] font-medium leading-none transition-colors",
-            active ? "text-fg" : "text-fg-muted",
+            active ? "hue-text" : "text-fg-muted",
           )}
         >
           {tab.label}
