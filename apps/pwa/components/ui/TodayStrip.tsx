@@ -52,7 +52,7 @@ export function sharesTile(h: HoldingsResponse): Tile {
       : 0;
   return {
     href: "/holdings",
-    label: "Shares",
+    label: "Stocks",
     hue: "--nav-holdings",
     icon: "chart",
     value: h.total_value.display,
@@ -85,7 +85,7 @@ export function pendingTile(escrow: Money): Tile {
 /**
  * One row of what today looks like: two or three figures, each a hairline
  * panel that opens the screen it summarises. This is the wallet's whole
- * middle; the tall card panel and the shares totals it replaces were each a
+ * middle; the tall card panel and the stocks totals it replaces were each a
  * section of their own, and the page read as a list of equal panels.
  */
 export function TodayStrip({ tiles, className }: { tiles: Tile[]; className?: string }) {

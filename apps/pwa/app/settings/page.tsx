@@ -31,7 +31,7 @@ import { useCard, useDepositAddress, useKycStatus } from "@/lib/ledger";
 
 /**
  * Settings, as six titled sections: Account, Card, Security, Limits, Your
- * shares, About. From 768px they fall into two columns; on the phone they
+ * stocks, About. From 768px they fall into two columns; on the phone they
  * stack in the same order.
  */
 export default function SettingsPage() {
@@ -197,7 +197,7 @@ export default function SettingsPage() {
             </div>
           </Section>
 
-          <Section title="Your shares" description="Businesses you own a slice of, earned one tap at a time.">
+          <Section title="Your stocks" description="Businesses you own a slice of, earned one tap at a time.">
             <div className={listClasses}>
               <SettingsRow
                 href="/holdings"

@@ -17,7 +17,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useSession } from "./auth";
-import { ApiError, holdingsApi, type EquityActivityItem, type EquityState } from "./api";
+import { ApiError, holdingsApi, type EquityState } from "./api";
 export type {
   Holding,
   HoldingDetail,
@@ -47,15 +47,15 @@ export const isExchangeDown = (err: unknown): boolean =>
  * server messages are written for an operator.
  */
 export function holdingsMessage(err: unknown): string {
-  if (isFeatureDisabled(err)) return "Shares are not enabled for this account.";
+  if (isFeatureDisabled(err)) return "Stocks are not enabled for this account.";
   if (isExchangeDown(err)) return "The equity market is unreachable right now. Try again shortly.";
-  return err instanceof Error ? err.message : "Could not load your shares.";
+  return err instanceof Error ? err.message : "Could not load your stocks.";
 }
 
 /** Never retry a 404 (feature off); retry anything else once. */
 const retry = (count: number, err: unknown) => !isFeatureDisabled(err) && count < 1;
 
-/** States that are on their way to becoming shares. */
+/** States that are on their way to becoming stocks. */
 export const isInFlight = (state: EquityState) =>
   state === "queued" || state === "pending" || state === "escrowed";
 
@@ -100,17 +100,33 @@ export function useEquityActivity(limit = 100) {
 // Formatting
 // -----------------------------------------------------------------------------
 
-/** "0.125000" → "0.125", "3.000" → "3", "12" → "12". */
-export function formatShares(shares: string): string {
-  if (!shares.includes(".")) return shares;
-  const trimmed = shares.replace(/0+$/, "").replace(/\.$/, "");
+/**
+ * A quantity of stock as text: "0.125000" → "0.125", "3.000" → "3".
+ *
+ * Full precision by default, which the holding page keeps -- it is the one
+ * place the exact figure is the point. Rows and the feed pass `decimals`
+ * (4) so "0.58311111" reads as "0.5831"; trailing zeros are trimmed either
+ * way. The API's field is still called `shares`; the word the app uses is
+ * "stocks".
+ */
+export function formatShares(shares: string, decimals?: number): string {
+  let s = shares;
+  if (decimals !== undefined) {
+    const n = Number(shares);
+    if (Number.isFinite(n)) s = n.toFixed(decimals);
+  }
+  if (!s.includes(".")) return s;
+  const trimmed = s.replace(/0+$/, "").replace(/\.$/, "");
   return trimmed === "" || trimmed === "-" ? "0" : trimmed;
 }
 
-/** "1" → "1 share", "0.125" → "0.125 shares". */
-export function sharesLabel(shares: string): string {
-  const n = formatShares(shares);
-  return `${n} ${n === "1" ? "share" : "shares"}`;
+/** Rows and the feed: four decimals, zeros trimmed. */
+export const BRIEF_DECIMALS = 4;
+
+/** "1" → "1 stock", "0.125" → "0.125 stocks". */
+export function sharesLabel(shares: string, decimals?: number): string {
+  const n = formatShares(shares, decimals);
+  return `${n} ${n === "1" ? "stock" : "stocks"}`;
 }
 
 /** 125 → "+1.25%", -40 → "−0.40%", 0 → "0.00%". */
@@ -185,33 +201,4 @@ export function formatDayMonth(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-}
-
-/**
- * Index equity activity by tap id so a ledger movement can show
- * "+0.125 MAMAPUT shares" without the activity payload carrying an equity
- * field. A movement joins on its `refId` when its `refType` is "tap".
- */
-export function indexEquityByTapId(
-  items: EquityActivityItem[] | undefined,
-): Map<string, EquityActivityItem> {
-  const map = new Map<string, EquityActivityItem>();
-  for (const item of items ?? []) map.set(item.tap_id, item);
-  return map;
-}
-
-/**
- * The equity line under a tap row, or null when there is nothing to say.
- *
- * "+0.125 MAMAPUT shares" once allocated; in-flight and reversed states are
- * named; a failed allocation says nothing, because the tap itself still went
- * through and a red line under it would read as the payment failing.
- */
-export function equityLine(item: EquityActivityItem | undefined): string | null {
-  if (!item || !item.symbol || item.state === "failed") return null;
-  const n = formatShares(item.bought.shares);
-  const noun = n === "1" ? "share" : "shares";
-  if (item.state === "allocated") return `+${n} ${item.symbol} ${noun}`;
-  if (isInFlight(item.state)) return `${n} ${item.symbol} ${noun} · pending`;
-  return `${n} ${item.symbol} ${noun} · reversed`;
 }

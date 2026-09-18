@@ -27,11 +27,11 @@ const isCard = (p: string) =>
  * app for; Cash is the pledge -- handing cash to an agent for wallet money
  * and back -- and Card is the other way money moves; Holdings is what a
  * card earns; Settings last. The tabs drop Holdings -- five is the most
- * a thumb can tell apart -- and the shares module on the wallet links to it.
+ * a thumb can tell apart -- and the Stocks tile on the wallet links to it.
  *
  * Each has one hue, from the theme's semantic set (globals.css). The same
  * hue is used wherever the same thing is meant elsewhere on a screen: a
- * card tile is violet, a shares tile is green.
+ * card tile is violet, a stocks tile is green.
  */
 export const NAV_ITEMS: NavItem[] = [
   { href: "/",              label: "Wallet",   icon: "wallet",   hue: "--nav-wallet",   match: (p) => p === "/" || p === "/wallet" },

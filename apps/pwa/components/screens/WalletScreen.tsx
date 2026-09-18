@@ -18,12 +18,11 @@ import { CrossFade } from "@/components/ui/CrossFade";
 import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
 import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
 import { Web3Avatar } from "@/components/ui/Web3Avatar";
-import { SharesModule } from "@/components/holdings/SharesModule";
 import { sectionLinkClasses, stackClasses } from "@/components/ui/Styles";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import { useBalances, useActivity, useCard } from "@/lib/ledger";
-import { useHoldings, useEquityActivity, indexEquityByTapId } from "@/lib/holdings";
+import { useHoldings, useEquityActivity } from "@/lib/holdings";
 import { formatMinor, type CardSummary } from "@/lib/api";
 
 /** How far back the home looks. The rest is one tap away, on Activity. */
@@ -37,12 +36,13 @@ const RECENT_ROWS = 6;
  * screen, which is how "/" and "/wallet" came to show different things -- a
  * fix applied to one of them silently did not apply to the other.
  *
- * The order is by weight: what you have (the hero), what today looks like
- * (one strip of figures), what you own (shares), what happened (today and
- * yesterday). Everything past that is a section link away. The previous
- * layout gave each of these a panel of equal size, and the page was a
- * scroll of similar boxes with the one number that matters at the top of
- * it, no larger than the rest.
+ * The order is by weight: what you have (the hero), what it is worth over
+ * time (the chart), what today looks like (one strip of figures, the
+ * Stocks tile among them), what happened (today and yesterday). Everything
+ * past that is a section link away: the stocks themselves are one tap off
+ * the tile or the Holdings item. The previous layout gave each of these a
+ * panel of equal size, and the page was a scroll of similar boxes with the
+ * one number that matters at the top of it, no larger than the rest.
  */
 export function WalletScreen() {
   const router = useRouter();
@@ -52,14 +52,13 @@ export function WalletScreen() {
   const card = useCard();
   const holdings = useHoldings();
   const equity = useEquityActivity(100);
-  const equityByRef = useMemo(() => indexEquityByTapId(equity.data?.activity), [equity.data]);
 
   useEffect(() => {
     if (hydrated && !session) router.replace("/sign-in?next=/wallet");
   }, [hydrated, session, router]);
 
   const movements = activity.data?.movements ?? [];
-  // Money and the shares it bought, in one feed; the six most recent of
+  // Money and the stock it bought, in one feed; the six most recent of
   // either kind from today and yesterday.
   const recent = useMemo(
     () =>
@@ -98,7 +97,7 @@ export function WalletScreen() {
           <p className="min-w-0 flex-1 truncate text-[13px] text-fg-muted">{session.email}</p>
         </header>
         <div className="hidden md:block">
-          <PageHeader title="Wallet" hideBack subtitle="Your balance, card and shares." />
+          <PageHeader title="Wallet" hideBack subtitle="Your balance, card and stocks." />
         </div>
 
         <CrossFade
@@ -159,8 +158,6 @@ export function WalletScreen() {
                     <p className="mt-0.5 text-xs">A quick resync keeps it working at the counter.</p>
                   </InfoBanner>
                 ) : null}
-
-                {firstUse ? null : <SharesModule query={holdings} />}
               </div>
 
               {firstUse ? null : (
@@ -168,7 +165,7 @@ export function WalletScreen() {
                   {activity.isLoading ? (
                     <SkeletonRows rows={3} />
                   ) : recent.length ? (
-                    <MovementList items={recent} equityByRef={equityByRef} grouped />
+                    <MovementList items={recent} grouped />
                   ) : movements.length ? (
                     <p className="text-[13px] leading-5 text-fg-muted">
                       Nothing today or yesterday.
@@ -231,7 +228,7 @@ function FirstUse() {
       <div className="grid gap-1">
         <p className="text-sm font-medium text-fg">Add money to start</p>
         <p className="text-[13px] leading-5 text-fg-muted">
-          Hand cash to an agent near you, or receive USDC on Base. Your card and shares
+          Hand cash to an agent near you, or receive USDC on Base. Your card and stocks
           follow from there.
         </p>
       </div>
@@ -278,10 +275,6 @@ function WalletSkeleton() {
               <Skeleton className="h-3 w-20" />
             </div>
           ))}
-        </div>
-        <div className="grid gap-3">
-          <Skeleton className="h-4 w-20" />
-          <SkeletonRows rows={3} />
         </div>
       </div>
       <div className="grid gap-3">

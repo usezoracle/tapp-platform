@@ -11,7 +11,7 @@ import { Skeleton, SkeletonRows } from "@/components/ui/Skeleton";
 import { listClasses, stackClasses } from "@/components/ui/Styles";
 import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
 import { HoldingRow, HoldingTableHeader } from "@/components/holdings/HoldingRow";
-import { PortfolioTotals } from "@/components/holdings/SharesModule";
+import { PortfolioTotals } from "@/components/holdings/PortfolioTotals";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import {
@@ -37,7 +37,7 @@ export default function HoldingsPage() {
     <Screen>
       <AnimatedComponent variant={slideInOut} className={cn(stackClasses, "py-4")}>
         <PageHeader
-          title="Your shares"
+          title="Your stocks"
           back="/"
           subtitle={q.data ? `As of ${formatDate(q.data.as_of)}` : "Earned one tap at a time"}
         />
@@ -53,7 +53,7 @@ export default function HoldingsPage() {
         ) : q.isError ? (
           isFeatureDisabled(q.error) ? (
             <div className="panel px-4 py-5 text-[13px] leading-5 text-fg-muted">
-              Shares are not enabled for this account yet.
+              Stocks are not enabled for this account yet.
             </div>
           ) : (
             <InfoBanner
@@ -76,8 +76,8 @@ export default function HoldingsPage() {
           )
         ) : q.data ? (
           <>
-            <Section title="Value" description="What your shares are worth at the last session price.">
-              <PortfolioTotals value={q.data.total_value} cost={q.data.total_cost} large />
+            <Section title="Value" description="What your stocks are worth at the last session price.">
+              <PortfolioTotals value={q.data.total_value} cost={q.data.total_cost} />
             </Section>
 
             <Section

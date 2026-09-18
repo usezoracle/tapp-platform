@@ -16,7 +16,7 @@ import { stackClasses } from "@/components/ui/Styles";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import { request, type Movement } from "@/lib/api";
-import { useEquityActivity, indexEquityByTapId } from "@/lib/holdings";
+import { useEquityActivity } from "@/lib/holdings";
 
 interface Page {
   movements: Movement[];
@@ -57,7 +57,6 @@ export default function HistoryPage() {
   });
 
   const equity = useEquityActivity(200);
-  const equityByRef = useMemo(() => indexEquityByTapId(equity.data?.activity), [equity.data]);
 
   const movements = useMemo(() => (pages.data ?? []).flatMap((p) => p.movements), [pages.data]);
   const feed = useMemo(() => mergeFeed(movements, equity.data?.activity), [movements, equity.data]);
@@ -65,7 +64,10 @@ export default function HistoryPage() {
 
   if (!hydrated || !session) return <Screen />;
 
-  const count = movements.length;
+  // What is listed, not what the ledger holds: the conversions that funded
+  // a tap are folded into it (see `withoutTapFunding`), and a count that
+  // exceeds the rows would send somebody looking for what is missing.
+  const count = feed.filter((f) => f.kind === "movement").length;
 
   return (
     <Screen>
@@ -93,7 +95,6 @@ export default function HistoryPage() {
           <>
             <MovementList
               items={feed}
-              equityByRef={equityByRef}
               grouped
               emptyState={
                 <EmptyState title="Nothing here yet">

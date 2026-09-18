@@ -23,7 +23,7 @@ interface PriceChartProps {
 
 /**
  * One symbol's adjusted price over the last 30 days, on the same chart the
- * wallet draws its shares value with, so the two read as one system: one
+ * wallet draws its stocks value with, so the two read as one system: one
  * point per session, and at the frame's start the price then in force, so
  * a symbol that last printed before the frame still has a line. The marks
  * under the line are the sessions on which a tap earned a lot of this

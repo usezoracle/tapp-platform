@@ -76,7 +76,7 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
         ) : q.isError ? (
           isFeatureDisabled(q.error) ? (
             <div className="panel px-4 py-5 text-[13px] leading-5 text-fg-muted">
-              Shares are not enabled for this account yet.
+              Stocks are not enabled for this account yet.
             </div>
           ) : (
             <InfoBanner
@@ -115,7 +115,7 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
                 <StatRow
                   className="border-t border-line pt-3"
                   stats={[
-                    { label: "Shares", value: formatShares(h.holding.shares) },
+                    { label: "Stocks", value: formatShares(h.holding.shares) },
                     { label: "Sellable", value: formatShares(h.sellable.shares) },
                     {
                       label: "Locked",
@@ -189,7 +189,7 @@ export default function HoldingPage({ params }: { params: Promise<{ symbol: stri
             {pendingItems.length > 0 ? (
               <Section
                 title="Pending"
-                description="Shares on their way. Queued and pending allocations wait for the exchange to settle; escrowed ones are held until the tap clears."
+                description="Stocks on their way. Queued and pending allocations wait for the exchange to settle; escrowed ones are held until the tap clears."
               >
                 <div className={listClasses}>
                   {pendingItems.map((item) => (

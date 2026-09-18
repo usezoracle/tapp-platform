@@ -51,7 +51,7 @@ const formatExact = (v: number) => naira.format(v);
  * The value of everything the card has earned, over the last 30 days.
  *
  * Computed here, exactly, from the events that moved it: each allocation
- * (a tap's shares landing, at its own moment) and each session's price.
+ * (a tap's stock landing, at its own moment) and each session's price.
  * At any time t the value is, over the symbols, the units allocated at or
  * before t times the price in force at t: the latest session price dated
  * at or before t, or, before the first print, the allocation's own price.
@@ -113,8 +113,8 @@ export function PortfolioChart({ className }: { className?: string }) {
   );
 
   if (list.isError && isFeatureDisabled(list.error)) return null;
-  // The shares module below already says what went wrong; a second banner
-  // about the same request would say it twice.
+  // The Stocks tile and /holdings say what went wrong; a banner here would
+  // say it again over the same request.
   if (list.isError) return null;
 
   const loading = list.isLoading || activity.isLoading || (symbols.length > 0 && details.pending);
@@ -135,9 +135,9 @@ export function PortfolioChart({ className }: { className?: string }) {
   if (symbols.length === 0 || points.length === 0) {
     return (
       <section className={cn("grid gap-3", className)}>
-        <p className="eyebrow">Shares value</p>
+        <p className="eyebrow">Stocks value</p>
         <div className="panel px-4 py-5 text-[13px] leading-5 text-fg-muted">
-          Your shares value will chart here after your first tap at a listed business.
+          Your stocks value will chart here after your first tap at a listed business.
         </div>
       </section>
     );
@@ -149,7 +149,7 @@ export function PortfolioChart({ className }: { className?: string }) {
   return (
     <section className={cn("grid gap-3", className)}>
       <div className="grid gap-0.5">
-        <p className="eyebrow">Shares value</p>
+        <p className="eyebrow">Stocks value</p>
         <p className="display text-2xl leading-7">{naira.format(last.value)}</p>
         {change ? (
           <p
@@ -173,7 +173,7 @@ export function PortfolioChart({ className }: { className?: string }) {
         format={formatAxis}
         formatExact={formatExact}
         live
-        ariaLabel="Shares value over the last 30 days"
+        ariaLabel="Stocks value over the last 30 days"
         className={chartHeightClasses}
       />
     </section>
@@ -224,7 +224,7 @@ const UNITS_PER_SHARE = BigInt(100_000_000);
 const HALF_UNIT = BigInt(50_000_000);
 const DAY = 86_400;
 
-/** Shares landing: when, how many units, and at what price (kobo a share). */
+/** Stock landing: when, how many units, and at what price (kobo a share). */
 interface Allocation {
   at: number;
   units: bigint;
@@ -241,7 +241,7 @@ interface Session {
  * The line, from the activity's allocations and the details' sessions.
  * Exported for tests. A lot the activity does not carry (older than its
  * limit, or not from a tap) is taken from the holding itself, at its
- * average cost, so the value never misses shares the card holds.
+ * average cost, so the value never misses stock the card holds.
  */
 export function portfolioSeries(
   activity: EquityActivityItem[],

@@ -30,7 +30,7 @@ export interface Lot {
   shares: string;
   cost: Money;
   acquired_at: string;
-  /** ISO date the 120-day lock on tap-earned shares ends. */
+  /** ISO date the 120-day lock on tap-earned stock ends. */
   transferable_from: string;
   tap_id: string | null;
 }
