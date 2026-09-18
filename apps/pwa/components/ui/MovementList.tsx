@@ -248,8 +248,8 @@ function tapTitle(m: Movement, label: string): { title: string; kind: string | n
   const merchant = m.merchant;
   const [base] = m.reason.split(":");
   if (!merchant || base === "tap.fee") return { title: label, kind: null };
-  if (m.amount.minor > 0) return { title: `Refund · ${merchant.name}`, kind: "Card refund" };
-  return { title: merchant.name, kind: label };
+  if (m.amount.minor > 0) return { title: `Refund from ${merchant.name}`, kind: "Card refund" };
+  return { title: `Spent at ${merchant.name}`, kind: label };
 }
 
 /** 48px row: quiet icon tile, label + when, right-aligned tabular amount. */
@@ -272,7 +272,6 @@ function MovementRow({
   const held = movement.account === "escrow";
   const shares = equityLine(equity);
   const { title, kind } = tapTitle(movement, label);
-  const symbol = movement.merchant?.symbol ?? null;
 
   // The tile's one colour says what kind of movement this is before the
   // label does: green for money arriving, ink for money leaving, the
@@ -308,7 +307,7 @@ function MovementRow({
           {held ? "Held · " : ""}
           {kind ? `${kind} · ` : ""}
           {whenText ?? when(movement.at)}
-          {kind && symbol ? ` · ${symbol}` : ""}
+
         </span>
         {/* Its own line, not appended to the date: beside a right-aligned
             amount there is not room for both, and "+0.125 MAMAPUT sha…" tells
