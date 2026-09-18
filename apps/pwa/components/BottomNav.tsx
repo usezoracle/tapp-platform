@@ -17,7 +17,7 @@ type Tab = NavItem;
  * are the rail's own (lib/nav.ts), so a phone and a laptop name the same
  * places the same way.
  */
-const PROMINENT = "/pay";
+const PROMINENT = "/cash";
 
 export function shouldShowBottomNav(pathname: string): boolean {
   if (pathname.startsWith("/demo-deck")) return false;
