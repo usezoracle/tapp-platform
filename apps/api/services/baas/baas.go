@@ -51,7 +51,15 @@ type Account struct {
 	// virtual accounts return it and it is not optional to the person doing
 	// the transfer: an account number without its bank cannot be paid into.
 	// Rails that do not open accounts leave it empty.
-	BankName      string
+	BankName string
+	// BankCode is the NIP/CBN code of BankName, when the rail could name it.
+	// Empty is honest: a code that was guessed sends money to the wrong bank.
+	BankCode string
+	// WalletID is the rail's handle for reading this account's own balance
+	// (GetAccount), where that differs from ID. Fintava's customer id (ID)
+	// and wallet id are two different strings, and only the second one can
+	// be asked for a balance.
+	WalletID      string
 	Balance       decimal.Decimal
 	LedgerBalance decimal.Decimal
 	Type          string
@@ -183,6 +191,17 @@ type Provider interface {
 	WebhookConfigured() bool
 	// ParseWebhook decodes the vendor payload into a neutral event.
 	ParseWebhook(body []byte) (*WebhookEvent, error)
+}
+
+// WalletLocator is implemented by rails that can find an account's balance
+// handle (Account.WalletID) from what a row opened before that handle was
+// recorded still has: the account number, and the email it was opened with.
+//
+// Optional rather than part of Provider: only a rail whose balance handle
+// differs from its account id needs it, and a rail that lacks it simply
+// cannot reconcile rows it did not record a wallet id for.
+type WalletLocator interface {
+	LocateWallet(ctx context.Context, searchTerm, accountNumber string) (walletID string, err error)
 }
 
 var (

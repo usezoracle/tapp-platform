@@ -55,6 +55,11 @@ func buildAdminRouter() *gin.Engine {
 	webhook := NewWebhooksController()
 	g.GET("webhooks", webhook.GetWebhookAttempts)
 	g.POST("webhooks/:id/retry", webhook.RetryWebhook)
+
+	ngn := NewNGNDepositsController()
+	g.GET("deposits/ngn/accounts", ngn.Find)
+	g.POST("deposits/ngn/accounts/:account_number/bank", ngn.SetBankName)
+	g.POST("deposits/ngn/accounts/:account_number/reconcile", ngn.ReconcileAccount)
 	return r
 }
 

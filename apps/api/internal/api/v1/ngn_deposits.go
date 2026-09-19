@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"github.com/usezoracle/tapp/api/config"
 	"github.com/usezoracle/tapp/api/internal/identity/kyc"
 	"github.com/usezoracle/tapp/api/internal/ledger"
 	"github.com/usezoracle/tapp/api/internal/ledger/movements"
@@ -42,8 +43,12 @@ type NGNDepositHandler struct {
 type ngnAccountResponse struct {
 	AccountNumber string `json:"account_number"`
 	BankName      string `json:"bank_name"`
-	AccountName   string `json:"account_name"`
-	Currency      string `json:"currency"`
+	// BankCode is the NIP code of BankName, for clients that autofill a
+	// payee. Empty when nobody -- the rail, the configuration, an operator
+	// -- has been able to say.
+	BankCode    string `json:"bank_code"`
+	AccountName string `json:"account_name"`
+	Currency    string `json:"currency"`
 	// Warning mirrors the crypto side: the one mistake on this screen that
 	// cannot be undone is sending from somewhere the credit cannot be
 	// attributed back to this person.
@@ -120,6 +125,45 @@ func (r provisionNGNAccountRequest) missing() []string {
 
 const ngnDepositWarning = "Transfer naira to this account from any Nigerian bank. " +
 	"It is yours and does not change."
+
+// legacyBankPlaceholder is what the first version of this feature stored as
+// the bank name whenever the rail's response did not carry one in the field
+// it read -- which, for Fintava, was every time. It was shown to real people
+// as the bank to send money to. Rows still carrying it are corrected on the
+// way out (see loadNGNAccount) until an operator fixes them in place.
+const legacyBankPlaceholder = "Fintava partner bank"
+
+// ngnBankFallback is the configured partner bank, used when the rail does not
+// name one and when a stored row carries the placeholder. A variable so a
+// test can set it without touching viper.
+var ngnBankFallback = func() (name, code string) {
+	bc := config.BaaSConfig()
+	return strings.TrimSpace(bc.FintavaDepositBankName), strings.TrimSpace(bc.FintavaDepositBankCode)
+}
+
+// presentableBank decides what a person sees for a stored bank name and
+// code. The placeholder, or nothing at all, is replaced by the configured
+// fallback; a real stored name is left alone. The configured code is only
+// ever paired with the configured name: a row naming some other bank with no
+// code stays without one, because a code belongs to exactly one bank and
+// showing another bank's would route a transfer to the wrong place.
+func presentableBank(storedName, storedCode string) (name, code string) {
+	name, code = strings.TrimSpace(storedName), strings.TrimSpace(storedCode)
+	fbName, fbCode := ngnBankFallback()
+	switch {
+	case name == "" || strings.EqualFold(name, legacyBankPlaceholder):
+		if fbName != "" {
+			name, code = fbName, fbCode
+		} else {
+			// No fallback configured. Better an honest blank than a name
+			// that is not a bank.
+			name, code = "", ""
+		}
+	case code == "" && strings.EqualFold(name, fbName):
+		code = fbCode
+	}
+	return name, code
+}
 
 // Get returns the caller's account, or 404 when they have not provisioned one.
 func (h *NGNDepositHandler) Get(ctx *gin.Context) {
@@ -266,12 +310,13 @@ func (h *NGNDepositHandler) Provision(ctx *gin.Context) {
 func loadNGNAccount(ctx context.Context, user uuid.UUID) (*ngnAccountResponse, error) {
 	var r ngnAccountResponse
 	err := storage.Pool.QueryRow(ctx, `
-		SELECT account_number, bank_name, account_name
+		SELECT account_number, bank_name, bank_code, account_name
 		  FROM ngn_deposit_accounts
-		 WHERE user_id = $1`, user).Scan(&r.AccountNumber, &r.BankName, &r.AccountName)
+		 WHERE user_id = $1`, user).Scan(&r.AccountNumber, &r.BankName, &r.BankCode, &r.AccountName)
 	if err != nil {
 		return nil, err
 	}
+	r.BankName, r.BankCode = presentableBank(r.BankName, r.BankCode)
 	r.Currency = "NGN"
 	r.Warning = ngnDepositWarning
 	return &r, nil
@@ -280,12 +325,16 @@ func loadNGNAccount(ctx context.Context, user uuid.UUID) (*ngnAccountResponse, e
 func saveNGNAccount(
 	ctx context.Context, user uuid.UUID, rail string, a *baas.Account,
 ) (*ngnAccountResponse, error) {
+	// The rail's answer wins; the configured partner bank fills a blank.
+	// What is stored is what the row will say for as long as it exists, so
+	// the placeholder this replaced is never written again.
+	bankName, bankCode := presentableBank(a.BankName, a.BankCode)
 	_, err := storage.Pool.Exec(ctx, `
 		INSERT INTO ngn_deposit_accounts
-			(user_id, rail, account_number, bank_name, account_name, rail_ref)
-		VALUES ($1, $2, $3, $4, $5, $6)
+			(user_id, rail, account_number, bank_name, bank_code, account_name, rail_ref, wallet_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (user_id) DO NOTHING`,
-		user, rail, a.AccountNumber, a.BankName, a.AccountName, a.ID)
+		user, rail, a.AccountNumber, bankName, bankCode, a.AccountName, a.ID, a.WalletID)
 	if err != nil {
 		return nil, err
 	}
@@ -344,12 +393,25 @@ func CreditNGNDeposit(
 		return true, err
 	}
 
+	if _, err := postNGNDeposit(ctx, user, accountNumber, value, source, reference); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// postNGNDeposit is the one place a naira deposit reaches the ledger. It
+// reports whether this call posted anything: false means the reference was
+// already there, which for a redelivered webhook is the mechanism working and
+// for a reconciliation run is the answer "nothing to do".
+func postNGNDeposit(
+	ctx context.Context, user uuid.UUID, accountNumber string,
+	value money.Amount, source, reference string,
+) (bool, error) {
 	if _, err := movements.Deposit(ctx, storage.Pool, user, value, source, reference); err != nil {
 		if errors.Is(err, ledger.ErrDuplicate) {
-			// A redelivery. The mechanism working, not a failure.
-			return true, nil
+			return false, nil
 		}
-		return true, fmt.Errorf("ngn deposits: credit %s to %s: %w", value, user, err)
+		return false, fmt.Errorf("ngn deposits: credit %s to %s: %w", value, user, err)
 	}
 	logger.Infof("💰 ngn deposit: %s → %s (account=%s ref=%s)", value, user, accountNumber, reference)
 	return true, nil

@@ -37,6 +37,14 @@ type BaaSConfiguration struct {
 	FintavaWebhookSecret string
 	FintavaBaseURL       string // default live; sandbox = https://dev.fintavapay.com/api/dev
 
+	// FintavaDepositBankName / FintavaDepositBankCode name the partner bank
+	// behind cardholders' STATIC_FUND deposit accounts, for when Fintava's
+	// create-customer response does not say (or said it in a shape this
+	// code did not recognise). Read at provisioning when the response has no
+	// bank, and again when a stored row still carries the old placeholder.
+	// Empty means "no fallback": the row keeps whatever it has.
+	FintavaDepositBankName string
+	FintavaDepositBankCode string
 }
 
 // BaaSConfig reads the BaaS provider settings from env.
@@ -50,6 +58,8 @@ func BaaSConfig() *BaaSConfiguration {
 	}
 
 	viper.SetDefault("FINTAVA_BASE_URL", "https://live.fintavapay.com/api/dev")
+	viper.SetDefault("FINTAVA_DEPOSIT_BANK_NAME", "")
+	viper.SetDefault("FINTAVA_DEPOSIT_BANK_CODE", "")
 
 	return &BaaSConfiguration{
 		ClientID:           viper.GetString("SAFEHAVEN_CLIENT_ID"),
@@ -64,5 +74,8 @@ func BaaSConfig() *BaaSConfiguration {
 		FintavaAPIKey:        viper.GetString("FINTAVA_API_KEY"),
 		FintavaWebhookSecret: viper.GetString("FINTAVA_WEBHOOK_SECRET"),
 		FintavaBaseURL:       viper.GetString("FINTAVA_BASE_URL"),
+
+		FintavaDepositBankName: viper.GetString("FINTAVA_DEPOSIT_BANK_NAME"),
+		FintavaDepositBankCode: viper.GetString("FINTAVA_DEPOSIT_BANK_CODE"),
 	}
 }

@@ -300,29 +300,95 @@ type CreateCustomerRequest struct {
 	NIN         string `json:"nin"`
 }
 
-// Customer is the tolerant decode of a created/fetched customer with
-// their wallet.
-type Customer struct {
-	ID     string `json:"id"`
-	CustID string `json:"customerId"`
-	Wallet struct {
-		ID            string      `json:"id"`
-		AccountNumber string      `json:"accountNumber"`
-		AccountName   string      `json:"accountName"`
-		BankName      string      `json:"bankName"`
-		Balance       flexDecimal `json:"availableBalance"`
-	} `json:"wallet"`
-	AccountNumber string `json:"accountNumber"` // some responses flatten
-	AccountName   string `json:"accountName"`
-	BankName      string `json:"bankName"`
+// BankRef is a bank as a rail names it: a field sent either as a bare string
+// ("loma") or as an object ({"name":"Loma MFB","code":"090620"}). The
+// backbone's pickProviderField only ever saw strings; being ready for the
+// object shape costs nothing and means a schema change on their side
+// degrades to "no bank" rather than a decode error that loses the account.
+type BankRef struct {
+	Name string
+	Code string
 }
 
-func (cu Customer) CustomerID() string {
-	if cu.CustID != "" {
-		return cu.CustID
+func (f *BankRef) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		*f = BankRef{}
+		return nil
 	}
-	return cu.ID
+	if strings.HasPrefix(s, `"`) {
+		var v string
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		*f = BankRef{Name: strings.TrimSpace(v)}
+		return nil
+	}
+	var obj struct {
+		Name     string `json:"name"`
+		BankName string `json:"bankName"`
+		Title    string `json:"title"`
+		Code     string `json:"code"`
+		BankCode string `json:"bankCode"`
+		SortCode string `json:"sortCode"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		// Something else entirely (a number, an array): not a bank, not an
+		// error worth failing the whole customer over.
+		*f = BankRef{}
+		return nil
+	}
+	*f = BankRef{
+		Name: strings.TrimSpace(firstNonEmpty(obj.Name, obj.BankName, obj.Title)),
+		Code: strings.TrimSpace(firstNonEmpty(obj.SortCode, obj.BankCode, obj.Code)),
+	}
+	return nil
 }
+
+// Customer is the tolerant decode of a created/fetched customer with
+// their wallet.
+//
+// Live shape of POST /create/customer (mirrored from the Zerocard
+// backbone, which has seen it):
+//
+//	{"data": {"userInfo": {"id": "<customer id>", ...},
+//	          "wallet":   {"id": "<wallet id>", "accountNumber": "...",
+//	                       "accountName": "...", "serviceProvider": "loma",
+//	                       "bank": "...", "fundMethod": "STATIC_FUND"}}}
+//
+// The bank is `wallet.serviceProvider` and/or `wallet.bank` -- never
+// `bankName`, which is what this struct read for its first weeks and got
+// nothing from.
+type Customer struct {
+	ID       string `json:"id"`
+	CustID   string `json:"customerId"`
+	UserInfo struct {
+		ID string `json:"id"`
+	} `json:"userInfo"`
+	Wallet struct {
+		ID              string      `json:"id"`
+		AccountNumber   string      `json:"accountNumber"`
+		AccountName     string      `json:"accountName"`
+		BankName        string      `json:"bankName"`
+		ServiceProvider BankRef     `json:"serviceProvider"`
+		Bank            BankRef     `json:"bank"`
+		Balance         flexDecimal `json:"availableBalance"`
+	} `json:"wallet"`
+	AccountNumber   string  `json:"accountNumber"` // some responses flatten
+	AccountName     string  `json:"accountName"`
+	BankName        string  `json:"bankName"`
+	ServiceProvider BankRef `json:"serviceProvider"`
+	Bank            BankRef `json:"bank"`
+}
+
+// CustomerID is Fintava's id for the person (userInfo.id on the live
+// shape). Support-facing; it is not what the wallet endpoints take.
+func (cu Customer) CustomerID() string {
+	return firstNonEmpty(cu.CustID, cu.ID, cu.UserInfo.ID)
+}
+
+// WalletID is what /customer/wallet/balance/{id} takes.
+func (cu Customer) WalletID() string { return cu.Wallet.ID }
 
 func (cu Customer) DepositAccountNumber() string {
 	if cu.Wallet.AccountNumber != "" {
@@ -331,14 +397,180 @@ func (cu Customer) DepositAccountNumber() string {
 	return cu.AccountNumber
 }
 
-func (cu Customer) DepositBankName() string {
-	if cu.Wallet.BankName != "" {
-		return cu.Wallet.BankName
+// RawBank is the bank exactly as the rail named it -- "loma", or a bank
+// object -- with whichever code it carried. Empty when the response had
+// none; it is the caller's job to decide what to show then. There is
+// deliberately no placeholder here any more: "Fintava partner bank" was
+// shown to real people as the bank to send their money to.
+func (cu Customer) RawBank() BankRef {
+	for _, f := range []BankRef{
+		cu.Wallet.ServiceProvider, cu.Wallet.Bank, {Name: cu.Wallet.BankName},
+		cu.ServiceProvider, cu.Bank, {Name: cu.BankName},
+	} {
+		if f.Name != "" || f.Code != "" {
+			return f
+		}
 	}
-	if cu.BankName != "" {
-		return cu.BankName
+	return BankRef{}
+}
+
+// customerListItem is one row of GET /customers/list. The wallet hangs
+// off userInfo there, not off the row.
+type customerListItem struct {
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Phone    string `json:"phone"`
+	UserInfo struct {
+		ID     string `json:"id"`
+		Wallet struct {
+			ID            string  `json:"id"`
+			AccountNumber string  `json:"accountNumber"`
+			AccountName   string  `json:"accountName"`
+			Provider      BankRef `json:"serviceProvider"`
+			Bank          BankRef `json:"bank"`
+		} `json:"wallet"`
+	} `json:"userInfo"`
+}
+
+// FindCustomerWallet looks a customer up by search term (their email)
+// and returns the one whose wallet has the given account number.
+//
+// This exists for accounts opened before the wallet id was recorded:
+// the balance endpoint wants the wallet id, the row has none, and the
+// account number is the one identifier both sides agree on.
+func (c *Client) FindCustomerWallet(ctx context.Context, searchTerm, accountNumber string) (*Customer, error) {
+	q := url.Values{"searchTerm": {searchTerm}, "take": {"50"}}
+	var rows []customerListItem
+	if err := c.do(ctx, http.MethodGet, "/customers/list?"+q.Encode(), nil, &rows); err != nil {
+		return nil, err
 	}
-	return "Fintava partner bank"
+	for _, r := range rows {
+		w := r.UserInfo.Wallet
+		if w.AccountNumber != accountNumber {
+			continue
+		}
+		var cu Customer
+		cu.ID = r.ID
+		cu.UserInfo.ID = r.UserInfo.ID
+		cu.Wallet.ID = w.ID
+		cu.Wallet.AccountNumber = w.AccountNumber
+		cu.Wallet.AccountName = w.AccountName
+		cu.Wallet.ServiceProvider = w.Provider
+		cu.Wallet.Bank = w.Bank
+		return &cu, nil
+	}
+	return nil, fmt.Errorf("fintava: no customer matching %q holds account %s", searchTerm, accountNumber)
+}
+
+// ResolveBank turns what the rail called the bank into what a person
+// should see, and the code a transfer to it needs.
+//
+// "loma" is what Fintava says; "Loma Microfinance Bank" and its NIP code
+// are what somebody typing a transfer into their banking app needs. The
+// bank list is the source of both: the raw name is matched against it
+// case-insensitively, either way round, so "loma" finds "Loma
+// Microfinance Bank" and "Iyin-Ekiti MFB" finds "Iyin-Ekiti Microfinance
+// Bank". When the catalogue cannot be read or has no match, the raw name
+// is tidied (title case, "Bank" appended) and the code is whatever the
+// response carried -- never invented.
+func (c *Client) ResolveBank(ctx context.Context, raw BankRef) (name, code string) {
+	rawName := strings.TrimSpace(raw.Name)
+	if rawName == "" {
+		return "", raw.Code
+	}
+	if c != nil {
+		if banks, err := c.ListBanks(ctx); err == nil {
+			if b, ok := matchBank(banks, rawName, raw.Code); ok {
+				return b.DisplayName(), firstNonEmpty(b.BankCode(), raw.Code)
+			}
+		}
+	}
+	return tidyBankName(rawName), raw.Code
+}
+
+// matchBank finds the catalogue entry for a raw provider name or code.
+//
+// Names are compared as sets of distinctive words -- "Loma Microfinance
+// Bank" is {loma}, "Iyin-Ekiti MFB" is {iyin-ekiti} -- because a substring
+// match finds "loma" inside "Diploma Bank" and a person would then be told to
+// send money to the wrong bank. Equal sets win; otherwise the catalogue entry
+// whose set contains the raw one with the fewest extra words.
+func matchBank(banks []Bank, rawName, rawCode string) (Bank, bool) {
+	// A code the response carried is the least ambiguous handle; try it first.
+	if rawCode != "" {
+		for _, b := range banks {
+			if b.BankCode() == rawCode {
+				return b, true
+			}
+		}
+	}
+	needle := distinctiveWords(rawName)
+	if len(needle) == 0 {
+		return Bank{}, false
+	}
+	var best Bank
+	bestExtra := -1
+	for _, b := range banks {
+		have := distinctiveWords(b.DisplayName())
+		if len(have) == 0 || !subset(needle, have) {
+			continue
+		}
+		extra := len(have) - len(needle)
+		if extra == 0 {
+			return b, true
+		}
+		if bestExtra < 0 || extra < bestExtra {
+			best, bestExtra = b, extra
+		}
+	}
+	return best, bestExtra >= 0
+}
+
+// genericBankWords carry no identity: every microfinance bank has them.
+var genericBankWords = map[string]bool{
+	"bank": true, "banks": true, "microfinance": true, "micro": true, "finance": true,
+	"mfb": true, "plc": true, "ltd": true, "limited": true, "nigeria": true, "the": true,
+	"of": true, "and": true, "&": true,
+}
+
+func distinctiveWords(name string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(name)) {
+		w = strings.Trim(w, ".,()")
+		if w != "" && !genericBankWords[w] {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+func subset(small, big map[string]bool) bool {
+	for w := range small {
+		if !big[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// tidyBankName is the last resort: "loma" → "Loma Bank",
+// "iyin-ekiti mfb" → "Iyin-Ekiti Mfb".
+func tidyBankName(raw string) string {
+	words := strings.Fields(strings.ToLower(raw))
+	for i, w := range words {
+		parts := strings.Split(w, "-")
+		for j, p := range parts {
+			if p != "" {
+				parts[j] = strings.ToUpper(p[:1]) + p[1:]
+			}
+		}
+		words[i] = strings.Join(parts, "-")
+	}
+	name := strings.Join(words, " ")
+	if !strings.Contains(strings.ToLower(name), "bank") && !strings.Contains(strings.ToLower(name), "mfb") {
+		name += " Bank"
+	}
+	return name
 }
 
 // CreateCustomer opens the permanent wallet (STATIC_FUND: funds remain

@@ -202,15 +202,37 @@ func (a *Adapter) CreateSubAccount(ctx context.Context, req baas.CreateSubAccoun
 	if err != nil {
 		return nil, err
 	}
+	// The response names the bank the way Fintava does internally
+	// ("loma"); resolve that against the bank list so what is stored is
+	// what a person can type into their banking app. Empty stays empty --
+	// the caller has a configured fallback for that, and a placeholder here
+	// is what put "Fintava partner bank" on people's screens.
+	bankName, bankCode := a.c.ResolveBank(ctx, cu.RawBank())
 	return &baas.Account{
 		ID:            cu.CustomerID(),
+		WalletID:      cu.WalletID(),
 		AccountNumber: cu.DepositAccountNumber(),
 		AccountName:   strings.TrimSpace(req.FirstName + " " + req.LastName),
-		BankName:      cu.DepositBankName(),
+		BankName:      bankName,
+		BankCode:      bankCode,
 		Type:          "static_fund_customer",
 		Currency:      "NGN",
 		Status:        "active",
 	}, nil
+}
+
+// LocateWallet finds the wallet id behind an account number for a
+// customer opened before wallet ids were recorded. searchTerm is the
+// email the customer was opened with. See baas.WalletLocator.
+func (a *Adapter) LocateWallet(ctx context.Context, searchTerm, accountNumber string) (string, error) {
+	cu, err := a.c.FindCustomerWallet(ctx, searchTerm, accountNumber)
+	if err != nil {
+		return "", err
+	}
+	if cu.WalletID() == "" {
+		return "", fmt.Errorf("fintava: customer holding %s has no wallet id", accountNumber)
+	}
+	return cu.WalletID(), nil
 }
 
 // VerifyWebhook checks x-fintava-signature: HMAC-SHA512 over the RAW

@@ -552,6 +552,15 @@ func cardsRoutes(route *gin.Engine) {
 	adminConsole.GET("webhooks", webhookCtrl.GetWebhookAttempts)
 	adminConsole.POST("webhooks/:id/retry", webhookCtrl.RetryWebhook)
 
+	// Cardholders' naira deposit accounts: find by email, correct the bank a
+	// row names, and post the credits a webhook that went elsewhere never
+	// delivered. The reconcile is a credit to a person and is audited with
+	// every figure it was computed from.
+	ngnOps := adminCtrl.NewNGNDepositsController()
+	adminConsole.GET("deposits/ngn/accounts", ngnOps.Find)
+	adminConsole.POST("deposits/ngn/accounts/:account_number/bank", ngnOps.SetBankName)
+	adminConsole.POST("deposits/ngn/accounts/:account_number/reconcile", ngnOps.ReconcileAccount)
+
 }
 
 // kycProvider builds the identity verifier, or nil when it is not configured.

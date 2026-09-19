@@ -1074,7 +1074,12 @@ paths:
         - BearerAuth: []
       responses:
         "200":
-          description: Account number, bank and account name
+          description: >
+            Account number, bank name, bank code and account name. The bank
+            is the rail's partner bank resolved against its bank list at
+            provisioning, or FINTAVA_DEPOSIT_BANK_NAME/_CODE when the rail did
+            not say; a row still holding the retired placeholder is shown as
+            the configured bank.
         "404":
           description: Not provisioned yet
     post:
@@ -1115,6 +1120,88 @@ paths:
   # ──────────────────────────────────────────────
   # Admin
   # ──────────────────────────────────────────────
+  /v1/admin/deposits/ngn/accounts:
+    get:
+      tags: [Admin]
+      summary: Find a cardholder's naira deposit account by email
+      security:
+        - AdminToken: []
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >
+            `{email, accounts: [{user_id, email, rail, account_number,
+            bank_name, bank_code, account_name, rail_ref, wallet_id,
+            created_at, needs_bank_fix}]}` -- the row as stored, placeholder
+            included, so an operator can see what needs correcting.
+
+  /v1/admin/deposits/ngn/accounts/{account_number}/bank:
+    post:
+      tags: [Admin]
+      summary: Correct the bank a deposit account row names (audited)
+      security:
+        - AdminToken: []
+      parameters:
+        - name: account_number
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bank_name]
+              properties:
+                bank_name: { type: string, example: "Loma Microfinance Bank" }
+                bank_code: { type: string, example: "090620" }
+      responses:
+        "200":
+          description: The corrected row
+        "404":
+          description: No deposit account with that number
+
+  /v1/admin/deposits/ngn/accounts/{account_number}/reconcile:
+    post:
+      tags: [Admin]
+      summary: Post credits the rail's webhook never delivered (audited)
+      description: >
+        Reads the account's wallet balance from the rail and posts the
+        difference between it and what the ledger has already credited from
+        that rail, as one deposit with reference
+        `reconcile:<account>:<balance-kobo>:<date>`. Idempotent: a second run
+        finds no shortfall and posts nothing. A balance below what was
+        credited is reported in `note` and nothing is posted. Rows opened
+        before the wallet id was stored have it looked up by account number
+        and recorded.
+      security:
+        - AdminToken: []
+      parameters:
+        - name: account_number
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >
+            `{account_number, wallet_balance, credited_before, posted,
+            reference, note, wallet_id}` with the three figures as money
+            amounts (`{minor, currency, display}`).
+        "404":
+          description: No deposit account with that number
+        "502":
+          description: The rail could not be read
+        "503":
+          description: No rail configured
+
   /v1/admin/users:
     get:
       tags: [Admin]
