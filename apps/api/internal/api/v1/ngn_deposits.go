@@ -74,6 +74,7 @@ type provisionNGNAccountRequest struct {
 	Address     string `json:"address"`
 	NIN         string `json:"nin"`
 	BVN         string `json:"bvn"`
+	Phone       string `json:"phone"` // optional; the BVN record's phone is used when absent
 }
 
 // fillFrom takes what the verified BVN record already established, for any
@@ -205,7 +206,28 @@ func (h *NGNDepositHandler) Provision(ctx *gin.Context) {
 		return
 	}
 
-	email, phone := contactFor(ctx.Request.Context(), user)
+	// The rail wants a reachable person: an email and a phone. The email is
+	// the account's; the phone is the one the bank holds against the BVN,
+	// which verification already fetched. Without either, ask rather than
+	// let the rail refuse with a message nobody can act on.
+	email := emailFor(ctx.Request.Context(), user)
+	phone := strings.TrimSpace(profile.Identity.Phone)
+	if p := strings.TrimSpace(req.Phone); p != "" {
+		phone = p
+	}
+	var need []string
+	if email == "" {
+		need = append(need, "email")
+	}
+	if phone == "" {
+		need = append(need, "phone")
+	}
+	if len(need) > 0 {
+		u.APIResponse(ctx, http.StatusBadRequest, "error",
+			"More details are needed to open a naira account",
+			map[string]any{"code": "kyc_required", "missing": need})
+		return
+	}
 	created, err := rail.CreateSubAccount(ctx.Request.Context(), baas.CreateSubAccountRequest{
 		ExternalReference: user.String(),
 		IdentityType:      "BVN",
@@ -270,14 +292,17 @@ func saveNGNAccount(
 	return loadNGNAccount(ctx, user)
 }
 
-// contactFor reads the details the rail wants alongside the BVN. Absent values
-// are passed as empty rather than failing: which of these a rail insists on is
-// the rail's business, and it will say so.
-func contactFor(ctx context.Context, user uuid.UUID) (email, phone string) {
-	_ = storage.Pool.QueryRow(ctx,
-		`SELECT coalesce(email,''), coalesce(phone_number,'') FROM users WHERE id = $1`,
-		user).Scan(&email, &phone)
-	return email, phone
+// emailFor is the account's email. Its predecessor also selected a
+// phone_number column the users table does not have, discarded the error,
+// and returned two empty strings — which the rail then refused, as a 502
+// with nothing the person could do about it.
+func emailFor(ctx context.Context, user uuid.UUID) string {
+	var email string
+	if err := storage.Pool.QueryRow(ctx,
+		`SELECT coalesce(email,'') FROM users WHERE id = $1`, user).Scan(&email); err != nil {
+		logger.Errorf("ngn deposits: email for %s: %v", user, err)
+	}
+	return strings.TrimSpace(email)
 }
 
 // -----------------------------------------------------------------------------
