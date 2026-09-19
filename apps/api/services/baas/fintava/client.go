@@ -596,9 +596,11 @@ func (c *Client) CreateCustomer(ctx context.Context, req CreateCustomerRequest) 
 
 // WalletBalance reads one customer wallet.
 func (c *Client) WalletBalance(ctx context.Context, walletID string) (decimal.Decimal, error) {
+	// Live Fintava answers {"balance": {"bookedBalance": 100, "availableBalance": 100}};
+	// an older shape put the figures at the top level. Take whichever is there.
 	var out struct {
-		Balance          flexDecimal `json:"balance"`
-		AvailableBalance flexDecimal `json:"availableBalance"`
+		Balance          json.RawMessage `json:"balance"`
+		AvailableBalance flexDecimal     `json:"availableBalance"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/customer/wallet/balance/"+url.PathEscape(walletID), nil, &out); err != nil {
 		return decimal.Zero, err
@@ -606,7 +608,26 @@ func (c *Client) WalletBalance(ctx context.Context, walletID string) (decimal.De
 	if !out.AvailableBalance.IsZero() {
 		return out.AvailableBalance.Decimal, nil
 	}
-	return out.Balance.Decimal, nil
+	if len(out.Balance) > 0 && out.Balance[0] == '{' {
+		var nested struct {
+			Booked    flexDecimal `json:"bookedBalance"`
+			Available flexDecimal `json:"availableBalance"`
+		}
+		if err := json.Unmarshal(out.Balance, &nested); err != nil {
+			return decimal.Zero, fmt.Errorf("fintava: decode wallet balance: %w", err)
+		}
+		if !nested.Available.IsZero() {
+			return nested.Available.Decimal, nil
+		}
+		return nested.Booked.Decimal, nil
+	}
+	var flat flexDecimal
+	if len(out.Balance) > 0 {
+		if err := json.Unmarshal(out.Balance, &flat); err != nil {
+			return decimal.Zero, fmt.Errorf("fintava: decode wallet balance: %w", err)
+		}
+	}
+	return flat.Decimal, nil
 }
 
 // -----------------------------------------------------------------------------
