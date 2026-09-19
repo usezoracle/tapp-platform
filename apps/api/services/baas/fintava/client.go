@@ -330,7 +330,9 @@ func (t TransferResult) AnyReference() string {
 // from the dispatcher) — Fintava echoes it on webhooks.
 func (c *Client) MerchantTransfer(ctx context.Context, customerReference string, amount decimal.Decimal, accountNumber, accountName, sortCode, narration string) (*TransferResult, error) {
 	body := map[string]any{
-		"amount":            amount, // naira (documented float, e.g. 1000.00)
+		// A JSON number, as the backbone sends it. decimal.Decimal marshals as
+		// a string, and the rail answers a string amount with a bare 500.
+		"amount":            amountNumber(amount), // naira (documented float, e.g. 1000.00)
 		"accountNumber":     accountNumber,
 		"accountName":       accountName,
 		"sortCode":          sortCode,
@@ -353,12 +355,12 @@ func (c *Client) MerchantTransfer(ctx context.Context, customerReference string,
 func (c *Client) CustomerTransfer(ctx context.Context, sourceID, customerReference string, amount decimal.Decimal, accountNumber, accountName, sortCode, narration string) (*TransferResult, error) {
 	body := map[string]any{
 		"sourceId":          sourceID,
-		"amount":            amount,
+		"amount":            amountNumber(amount), // a JSON number; see MerchantTransfer
 		"accountNumber":     accountNumber,
 		"accountName":       accountName,
 		"sortCode":          sortCode,
 		"narration":         narration,
-		"CustomerReference": customerReference,
+		"customerReference": customerReference,
 	}
 	var out TransferResult
 	if err := c.do(ctx, http.MethodPost, "/bank/credit", body, &out); err != nil {
@@ -791,4 +793,11 @@ func (c *Client) VerifyBVNSelfie(ctx context.Context, bvn, imageBase64 string) e
 		"bvn":   bvn,
 		"image": imageBase64,
 	}, nil)
+}
+
+// amountNumber renders a naira amount as the JSON number the rail expects.
+// Kobo precision is two decimals, which float64 carries exactly for any
+// amount this rail will move.
+func amountNumber(d decimal.Decimal) json.Number {
+	return json.Number(d.StringFixed(2))
 }
