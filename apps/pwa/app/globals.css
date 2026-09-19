@@ -124,6 +124,7 @@
      six coloured icons read as a system: two royals (Wallet and Pay are
      the balance and the way it is spent), a teal, a violet, a green and a
      slate. Read through `--hue` on the item; see the nav-* utilities. */
+  --brand-mark: #d7261e; /* the Freedom mark; the wordmark takes the ink */
   --nav-wallet: #0065f5;
   --nav-activity: #0e8a7a;
   --nav-pay: #0065f5;
@@ -180,6 +181,7 @@
   --pending-wash: #14243d;
   --pending-fg: #a9c8ff;
 
+  --brand-mark: #ef3b33;
   --nav-wallet: #7ea2ff;
   --nav-activity: #4fc3b3;
   --nav-pay: #7ea2ff;
