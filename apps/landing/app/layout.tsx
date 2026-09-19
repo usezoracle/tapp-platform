@@ -19,7 +19,7 @@ const jetbrains = JetBrains_Mono({
   weight: ["400", "500"],
 });
 
-const SITE = "https://freedom-landing.vercel.app";
+const SITE = "https://freedomnetwork.xyz";
 const TITLE = "Freedom — a card that makes money for you";
 const DESCRIPTION =
   "Tap to pay at any Freedom shop and you own a slice of it. Every time. A prepaid card with a real market behind it.";

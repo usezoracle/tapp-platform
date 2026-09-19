@@ -26,6 +26,7 @@ type ServerConfiguration struct {
 	// business registers and lists on the exchange. Listed here so its origin
 	// is allowed by CORS like the other browser apps.
 	BusinessBaseURL     string
+	ExtraOrigins        string
 	AdminAPIToken       string
 	GoogleOAuthClientID string
 	SettlementAPIURL    string
@@ -69,6 +70,7 @@ func ServerConfig() *ServerConfiguration {
 		PWABaseURL:          viper.GetString("PWA_BASE_URL"),
 		AdminBaseURL:        viper.GetString("ADMIN_BASE_URL"),
 		BusinessBaseURL:     viper.GetString("BUSINESS_BASE_URL"),
+		ExtraOrigins:        viper.GetString("EXTRA_ORIGINS"),
 		AdminAPIToken:       viper.GetString("ADMIN_API_TOKEN"),
 		GoogleOAuthClientID: viper.GetString("GOOGLE_OAUTH_CLIENT_ID"),
 		SettlementAPIURL:    viper.GetString("SETTLEMENT_API_URL"),
