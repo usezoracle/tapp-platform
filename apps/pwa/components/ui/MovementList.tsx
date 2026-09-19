@@ -325,7 +325,9 @@ function MovementRow({
  */
 function EquityRow({ item, when: whenText }: { item: EquityActivityItem; when?: string }) {
   const symbol = item.symbol ?? item.merchant?.symbol ?? null;
-  const n = formatShares(item.bought.shares, BRIEF_DECIMALS);
+  // Until the merchant has been paid the stock has not been bought, so a
+  // held or queued item carries no quantity, funding or price yet.
+  const n = item.bought ? formatShares(item.bought.shares, BRIEF_DECIMALS) : null;
   const awaiting = item.state === "held" || item.state === "queued";
   const pending = awaiting || item.state === "pending" || item.state === "escrowed";
   const returned = item.state === "reversed";
@@ -333,7 +335,11 @@ function EquityRow({ item, when: whenText }: { item: EquityActivityItem; when?: 
   const what = symbol ? `${symbol} stock` : "Stock";
   const title = returned ? `${what} returned` : pending ? `${what} pending` : `${what} credited`;
 
-  const cost = item.price ? `${item.funding.display} at ${item.price.display}` : item.funding.display;
+  const cost = !item.funding
+    ? "Buying once the shop is paid"
+    : item.price
+      ? `${item.funding.display} at ${item.price.display}`
+      : item.funding.display;
   const from = item.tap_amount ? ` · from your ${item.tap_amount.display} tap` : " · from your tap";
 
   const body = (
@@ -356,9 +362,7 @@ function EquityRow({ item, when: whenText }: { item: EquityActivityItem; when?: 
       </span>
 
       <span className="hue-text shrink-0 text-right text-sm font-medium tabular-nums">
-        {returned ? "−" : "+"}
-        {n}
-        {symbol ? ` ${symbol}` : ""}
+        {n === null ? "—" : `${returned ? "−" : "+"}${n}${symbol ? ` ${symbol}` : ""}`}
       </span>
     </div>
   );

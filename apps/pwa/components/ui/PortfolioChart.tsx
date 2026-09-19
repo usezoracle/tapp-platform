@@ -257,7 +257,7 @@ export function portfolioSeries(
 
   const known = new Set<string>();
   for (const item of activity) {
-    if (item.state !== "allocated" || !item.symbol || !item.price || item.bought.units <= 0) continue;
+    if (item.state !== "allocated" || !item.symbol || !item.price || !item.bought || item.bought.units <= 0) continue;
     const at = isoSeconds(item.at);
     if (Number.isNaN(at)) continue;
     known.add(item.tap_id);

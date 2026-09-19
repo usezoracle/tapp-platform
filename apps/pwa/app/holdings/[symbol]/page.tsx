@@ -209,9 +209,12 @@ function PendingRow({ item }: { item: EquityActivityItem }) {
   return (
     <div className="flex min-h-12 items-center gap-3 px-3 py-2">
       <div className="grid min-w-0 flex-1 gap-0.5">
-        <p className="text-sm font-medium tabular-nums text-fg">{sharesLabel(item.bought.shares)}</p>
+        <p className="text-sm font-medium tabular-nums text-fg">
+          {item.bought ? sharesLabel(item.bought.shares) : "Awaiting settlement"}
+        </p>
         <p className="truncate text-xs text-fg-muted">
-          {formatDate(item.at)} · {item.funding.display}
+          {formatDate(item.at)}
+          {item.funding ? ` · ${item.funding.display}` : " · buying once the shop is paid"}
           {item.price ? ` at ${item.price.display}` : ""}
         </p>
       </div>

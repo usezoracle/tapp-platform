@@ -87,9 +87,9 @@ export type EquityState =
 export interface EquityActivityItem {
   tap_id: string;
   symbol: string | null;
-  funding: Money;
+  funding: Money | null;
   state: EquityState;
-  bought: Quantity;
+  bought: Quantity | null;
   price: Money | null;
   at: string;
   /** The business tapped at, and its listing. */
