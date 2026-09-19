@@ -60,7 +60,7 @@ export default function DepositPage() {
         <Route
           href="/deposit/naira"
           icon={<PiBankBold />}
-          title="Transfer naira"
+          title="Transfer in naira"
           body="Transfer to your own account number from any Nigerian bank. Naira in your balance when it lands."
           balanceLabel="Your naira"
           balance={ngn?.available}
