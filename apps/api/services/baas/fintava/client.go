@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,6 +69,23 @@ type envelope struct {
 	StatusCode any             `json:"statusCode"`
 	Message    string          `json:"message"`
 	Data       json.RawMessage `json:"data"`
+}
+
+// envelopeStatus reads the numeric status Fintava puts in the body, when it
+// puts one there; 0 when absent or not a number.
+func envelopeStatus(env envelope) int {
+	for _, v := range []any{env.StatusCode, env.Status} {
+		switch x := v.(type) {
+		case float64:
+			return int(x)
+		case string:
+			var n int
+			if _, err := fmt.Sscanf(x, "%d", &n); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // APIError is a non-2xx answer from Fintava.
@@ -120,7 +138,12 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	var env envelope
 	_ = json.Unmarshal(raw, &env) // tolerate non-envelope bodies
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	// A refusal can arrive as an HTTP error or as a 2xx whose body carries
+	// its own status of 4xx/5xx. Both are refusals; neither must be read as
+	// "accepted, pending". A body that says status 400 inside a 200 is what
+	// turned a refused transfer into a phantom pending one.
+	bodyStatus := envelopeStatus(env)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || bodyStatus >= 400 {
 		msg := env.Message
 		if msg == "" {
 			msg = strings.TrimSpace(string(raw))
@@ -128,7 +151,11 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 				msg = msg[:300]
 			}
 		}
-		return &APIError{StatusCode: resp.StatusCode, Message: msg}
+		code := resp.StatusCode
+		if code >= 200 && code < 300 {
+			code = bodyStatus
+		}
+		return &APIError{StatusCode: code, Message: msg}
 	}
 	if out != nil {
 		// Prefer the data field; fall back to the whole body for
@@ -274,11 +301,16 @@ func (c *Client) NameEnquiry(ctx context.Context, accountNumber, sortCode string
 // TransferResult is the tolerant decode of transfer submit/status
 // responses.
 type TransferResult struct {
+	// ID is the rail's own transaction id (live /bank/credit answers
+	// data.id + data.reference + total + transaction_fee, and no status).
+	ID                string      `json:"id"`
 	Reference         string      `json:"reference"`
 	TransactionRef    string      `json:"transactionReference"`
 	CustomerReference string      `json:"customerReference"`
 	Status            string      `json:"status"`
 	Amount            flexDecimal `json:"amount"`
+	Total             flexDecimal `json:"total"`
+	TransactionFee    flexDecimal `json:"transaction_fee"`
 	Charges           flexDecimal `json:"charges"`
 	Message           string      `json:"message"`
 }
@@ -287,7 +319,10 @@ func (t TransferResult) AnyReference() string {
 	if t.Reference != "" {
 		return t.Reference
 	}
-	return t.TransactionRef
+	if t.TransactionRef != "" {
+		return t.TransactionRef
+	}
+	return t.ID
 }
 
 // MerchantTransfer pays a bank account from the MERCHANT wallet.
@@ -328,6 +363,14 @@ func (c *Client) CustomerTransfer(ctx context.Context, sourceID, customerReferen
 	var out TransferResult
 	if err := c.do(ctx, http.MethodPost, "/bank/credit", body, &out); err != nil {
 		return nil, err
+	}
+	slog.Info("fintava: bank credit accepted",
+		"reference", customerReference, "rail_id", out.ID, "rail_ref", out.Reference,
+		"amount", amount.String(), "fee", out.TransactionFee.String())
+	if out.AnyReference() == "" {
+		// The rail answered 2xx but named no transaction. Nothing we can
+		// chase, nothing we can prove was created: a refusal, not a pending.
+		return nil, &APIError{StatusCode: 502, Message: "fintava: bank credit answered without a transaction id or reference"}
 	}
 	return &out, nil
 }
