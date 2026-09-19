@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { useSession } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { Logo } from "@/components/Brand";
 
 const nav = [
   { href: "/business", label: "Your business" },
@@ -23,11 +24,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-dvh flex-col">
       <div className="border-b border-line">
         <div className="mx-auto flex h-12 w-full max-w-[880px] items-center gap-6 px-4">
-          <Link href="/" className="focus-ring flex items-center gap-2 rounded-sm">
-            <span aria-hidden className="grid size-5 place-items-center rounded-sm bg-primary text-[10px] font-semibold text-primary-fg">
-              F
-            </span>
-            <span className="text-[13px] font-medium">Freedom Exchange</span>
+          <Link href="/" className="focus-ring flex items-center rounded-sm text-fg" aria-label="Freedom Exchange">
+            <Logo className="translate-y-[1.5px]" />
           </Link>
           {session ? (
             <nav className="flex items-center gap-1" aria-label="Main">
