@@ -40,10 +40,13 @@ type ngnSettlementView struct {
 	CardholderID string `json:"cardholder_id"`
 	MerchantID   string `json:"merchant_id"`
 	// The cardholder's wallet the leg is paid from.
-	SourceWalletID    string `json:"source_wallet_id"`
+	SourceWalletID      string `json:"source_wallet_id"`
 	SourceAccountNumber string `json:"source_account_number"`
 	Currency            string `json:"currency"`
 	Amount              string `json:"amount"`
+	// Funded is what the cardholder's naira paid for the tap, leg plus
+	// scheme fee: what the wallet is relieved of.
+	Funded string `json:"funded"`
 
 	Bank bankView `json:"bank"`
 	// FintavaBankCode is the sort code the rail was actually given for the
@@ -54,8 +57,15 @@ type ngnSettlementView struct {
 	Reference string `json:"reference"`
 	State     string `json:"state"`
 	Attempts  int    `json:"attempts"`
-	RailRef   string `json:"rail_ref,omitempty"`
-	Error     string `json:"error,omitempty"`
+	// The first hop: the sweep from the cardholder's wallet into the
+	// platform's. Empty until the rail accepted it.
+	SweepRef string `json:"sweep_ref,omitempty"`
+	SweptAt  string `json:"swept_at,omitempty"`
+	SweepFee string `json:"sweep_fee,omitempty"`
+	// The second hop: the platform's wallet paying the bank.
+	RailRef string `json:"rail_ref,omitempty"`
+	RailFee string `json:"rail_fee,omitempty"`
+	Error   string `json:"error,omitempty"`
 
 	CreatedAt   string `json:"created_at"`
 	UpdatedAt   string `json:"updated_at"`
@@ -67,13 +77,22 @@ func ngnSettlementOf(s *naira.Settlement) ngnSettlementView {
 	v := ngnSettlementView{
 		TapID: s.TapID.String(), CardholderID: s.CardholderID.String(), MerchantID: s.MerchantID.String(),
 		SourceWalletID: s.SourceWalletID, SourceAccountNumber: s.SourceAccountNumber,
-		Currency: string(s.Amount.Currency()), Amount: plain(s.Amount),
+		Currency: string(s.Amount.Currency()), Amount: plain(s.Amount), Funded: plain(s.Funded),
 		Bank:            bankView{Institution: s.BankCode, AccountNumber: s.AccountNumber, AccountName: s.AccountName},
 		FintavaBankCode: s.FintavaBankCode,
 		Reference:       s.Reference, State: s.State, Attempts: s.Attempts,
-		RailRef: s.RailRef, Error: s.Error,
+		SweepRef: s.SweepRef, RailRef: s.RailRef, Error: s.Error,
 		CreatedAt: s.CreatedAt.UTC().Format(tsLayout),
 		UpdatedAt: s.UpdatedAt.UTC().Format(tsLayout),
+	}
+	if s.SweptAt != nil {
+		v.SweptAt = s.SweptAt.UTC().Format(tsLayout)
+	}
+	if s.SweepFee.IsPositive() {
+		v.SweepFee = plain(s.SweepFee)
+	}
+	if s.RailFee.IsPositive() {
+		v.RailFee = plain(s.RailFee)
 	}
 	if s.SubmittedAt != nil {
 		v.SubmittedAt = s.SubmittedAt.UTC().Format(tsLayout)

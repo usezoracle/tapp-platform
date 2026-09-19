@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,16 +85,26 @@ type fakeRail struct {
 	// enquiries records the bank code each name enquiry was asked with.
 	enquiries []string
 
+	// The sweep, wallet to wallet: what it answers, and each one asked.
+	sweepErr    error
+	sweepStatus baas.TransferStatus
+	sweeps      []baas.WalletSweepRequest
+	// The bank transfer from the platform's wallet: what it answers, each
+	// one asked, and what a status check says of it.
 	status      baas.TransferStatus
 	message     string
 	transferErr error
+	transfers   []baas.TransferRequest
 	chase       *baas.Transfer
+	// chaseSweep is what a status check of the sweep says; nil means the
+	// rail has no record of it.
+	chaseSweep *baas.Transfer
 	// held is the wallet balance GetAccount reports; nil means the rail
 	// cannot say, which must not stop a payment.
 	held *decimal.Decimal
-
-	transfers []baas.WalletTransferRequest
 }
+
+const platformAccount = "0010354634"
 
 func (f *fakeRail) Name() string { return "fintava" }
 
@@ -104,7 +115,29 @@ func (f *fakeRail) NameEnquiry(_ context.Context, bankCode, account string) (*ba
 	return &baas.NameEnquiry{AccountNumber: account, AccountName: f.accountName, BankCode: bankCode}, nil
 }
 
-func (f *fakeRail) TransferFromWallet(_ context.Context, req baas.WalletTransferRequest) (*baas.Transfer, error) {
+func (f *fakeRail) PlatformWalletAccount(context.Context) (string, error) {
+	return platformAccount, nil
+}
+
+func (f *fakeRail) SweepToPlatform(_ context.Context, req baas.WalletSweepRequest) (*baas.Transfer, error) {
+	f.mu.Lock()
+	f.sweeps = append(f.sweeps, req)
+	f.mu.Unlock()
+	if f.sweepErr != nil {
+		return nil, f.sweepErr
+	}
+	status := f.sweepStatus
+	if status == "" {
+		status = baas.TransferSuccess
+	}
+	return &baas.Transfer{
+		Reference: "ftv-" + req.PaymentReference, PaymentReference: req.PaymentReference,
+		Amount: req.Amount, Fees: decimal.NewFromInt(15), Status: status,
+	}, nil
+}
+
+// Transfer is the bank transfer from the platform's wallet: the second hop.
+func (f *fakeRail) Transfer(_ context.Context, req baas.TransferRequest) (*baas.Transfer, error) {
 	f.mu.Lock()
 	f.transfers = append(f.transfers, req)
 	f.mu.Unlock()
@@ -113,27 +146,37 @@ func (f *fakeRail) TransferFromWallet(_ context.Context, req baas.WalletTransfer
 	}
 	return &baas.Transfer{
 		Reference: "ftv-" + req.PaymentReference, PaymentReference: req.PaymentReference,
-		Status: f.status, Message: f.message,
+		Amount: req.Amount, Fees: decimal.NewFromInt(10), Status: f.status, Message: f.message,
 	}, nil
 }
 
 func (f *fakeRail) TransferStatus(_ context.Context, ref string) (*baas.Transfer, error) {
+	if strings.HasSuffix(ref, "-sweep") {
+		if f.chaseSweep != nil {
+			return f.chaseSweep, nil
+		}
+		return &baas.Transfer{Reference: ref, Status: baas.TransferPending, RawStatus: "not_found"}, nil
+	}
 	if f.chase != nil {
 		return f.chase, nil
 	}
 	return &baas.Transfer{Reference: ref, Status: baas.TransferPending, RawStatus: "not_found"}, nil
 }
 
+// sent counts bank transfers asked of the rail.
 func (f *fakeRail) sent() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.transfers)
 }
 
-// Transfer is the platform-account payout; a naira leg must never use it.
-func (f *fakeRail) Transfer(context.Context, baas.TransferRequest) (*baas.Transfer, error) {
-	return nil, errors.New("a naira leg must be paid from the cardholder's wallet, not the platform's account")
+// swept counts sweeps asked of the rail.
+func (f *fakeRail) swept() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.sweeps)
 }
+
 func (f *fakeRail) ListBanks(context.Context) ([]baas.Bank, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -194,7 +237,7 @@ func (f *fixture) wallet(t *testing.T, cardholder uuid.UUID, customerID string) 
 	}
 	if _, err := f.Pool.Exec(ctx, `
 		INSERT INTO ngn_deposit_accounts (user_id, rail, account_number, bank_name, account_name, rail_ref, wallet_id)
-		VALUES ($1, 'fintava', $2, 'Loma', 'ADA O', $3, 'wal-' || $3)`, cardholder, accountNumber, customerID); err != nil {
+		VALUES ($1, 'fintava', $2, 'Loma', 'ADA O', $3, CASE WHEN $3 = '' THEN '' ELSE 'wal-' || $3 END)`, cardholder, accountNumber, customerID); err != nil {
 		t.Fatal(err)
 	}
 	return accountNumber
@@ -244,7 +287,7 @@ func (f *fixture) nairaTap(t *testing.T, merchant uuid.UUID) (tap uuid.UUID, owe
 			tap, uuid.New(), cardholder, merchant, amount.Minor(), fee.Minor(), ledgerTx, uuid.NewString()); err != nil {
 			return err
 		}
-		return Record(ctx, tx, tap, cardholder, merchant, "fintava", owed)
+		return Record(ctx, tx, tap, cardholder, merchant, "fintava", owed, amount)
 	})
 	if err != nil {
 		t.Fatalf("naira tap: %v", err)
@@ -288,7 +331,7 @@ func TestATapNobodyCanBePaidForIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := movements.InTx(ctx, f.Pool, func(tx pgx.Tx) error {
-		return Record(ctx, tx, uuid.New(), cardholder, merchant, "fintava", money.Naira(100))
+		return Record(ctx, tx, uuid.New(), cardholder, merchant, "fintava", money.Naira(100), money.Naira(100))
 	})
 	if !errors.Is(err, ErrNoBankAccount) {
 		t.Fatalf("Record = %v, want ErrNoBankAccount", err)
@@ -308,7 +351,7 @@ func TestATapNobodyCanBePaidForIsRefused(t *testing.T) {
 		{"no rail configured", cardholder, ""},
 	} {
 		err := movements.InTx(ctx, f.Pool, func(tx pgx.Tx) error {
-			return Record(ctx, tx, uuid.New(), c.cardholder, merchant, c.rail, money.Naira(100))
+			return Record(ctx, tx, uuid.New(), c.cardholder, merchant, c.rail, money.Naira(100), money.Naira(100))
 		})
 		if !errors.Is(err, ErrNoWallet) {
 			t.Errorf("%s: Record = %v, want ErrNoWallet", c.name, err)
@@ -317,10 +360,10 @@ func TestATapNobodyCanBePaidForIsRefused(t *testing.T) {
 	noID := uuid.New()
 	f.wallet(t, noID, "")
 	err = movements.InTx(ctx, f.Pool, func(tx pgx.Tx) error {
-		return Record(ctx, tx, uuid.New(), noID, merchant, "fintava", money.Naira(100))
+		return Record(ctx, tx, uuid.New(), noID, merchant, "fintava", money.Naira(100), money.Naira(100))
 	})
 	if !errors.Is(err, ErrNoWallet) {
-		t.Errorf("no customer id: Record = %v, want ErrNoWallet", err)
+		t.Errorf("no wallet id: Record = %v, want ErrNoWallet", err)
 	}
 }
 
@@ -342,27 +385,50 @@ func TestAQueuedSettlementIsPaidOnce(t *testing.T) {
 	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); got.Minor() != owed.Minor() {
 		t.Fatalf("merchant owed %s before payout, want %s", got, owed)
 	}
+	revenueBefore := f.balance(t, ledger.System(), ledger.KindRevenue)
 
 	paid, _, err := f.Worker.Tick(ctx)
 	if err != nil || paid != 1 {
 		t.Fatalf("Tick: paid=%d err=%v", paid, err)
 	}
+	// Hop one: the tap's naira, less the rail's sender fee, from the
+	// cardholder's wallet into the platform's -- so the wallet loses
+	// exactly the ₦1,600 the cardholder was charged.
+	if f.Rail.swept() != 1 {
+		t.Fatalf("sweeps = %+v, want one", f.Rail.sweeps)
+	}
+	sweep := f.Rail.sweeps[0]
+	if sweep.PaymentReference != s.Reference+"-sweep" || sweep.SenderAccount != s.SourceAccountNumber ||
+		sweep.ReceiverAccount != platformAccount || sweep.Narration != "Tapp: Mama Put" {
+		t.Fatalf("sweep asked %+v; want the sweep reference, from the cardholder's wallet to the platform's", sweep)
+	}
+	if sweep.Amount.String() != "1585" {
+		t.Errorf("swept %s, want 1585 (the ₦1,600 charged less the ₦15 sender fee)", sweep.Amount)
+	}
+	// Hop two: the leg, from the platform's wallet to the merchant's bank,
+	// under the tap's own reference.
 	if f.Rail.sent() != 1 {
 		t.Fatalf("transfers = %+v, want one", f.Rail.transfers)
 	}
 	sent := f.Rail.transfers[0]
-	if sent.PaymentReference != s.Reference || sent.SourceID != s.SourceWalletID ||
-		sent.BeneficiaryAccount != "9034409271" || sent.BeneficiaryBankCode != "090325" ||
-		sent.BeneficiaryName != "OLUMIDE SILAS OGUNDELE" || sent.Narration != "Tapp: Mama Put" {
-		t.Fatalf("rail was asked %+v; want the tap's reference, from the cardholder's wallet, to the merchant's verified bank", sent)
+	if sent.PaymentReference != s.Reference ||
+		sent.BeneficiaryAccount != "9034409271" || sent.BeneficiaryBankCode != "090325" || sent.Narration != "Tapp: Mama Put" {
+		t.Fatalf("rail was asked %+v; want the tap's reference, to the merchant's verified bank", sent)
 	}
 	if sent.Amount.String() != "1592" {
 		t.Errorf("sent %s, want 1592 (the tap less the fee)", sent.Amount)
 	}
 
 	s = f.row(t, tap)
-	if s.State != Settled || s.Attempts != 1 || s.RailRef != "ftv-"+s.Reference || s.SettledAt == nil {
-		t.Fatalf("row after payout = %+v, want settled", s)
+	if s.State != Settled || s.Attempts != 1 || s.RailRef != "ftv-"+s.Reference || s.SettledAt == nil ||
+		s.SweepRef != "ftv-"+s.Reference+"-sweep" || s.SweptAt == nil ||
+		s.SweepFee.Minor() != 1500 || s.RailFee.Minor() != 1000 {
+		t.Fatalf("row after payout = %+v, want settled with both hops and their fees", s)
+	}
+	// The rail's ₦25 of fees come out of the ₦8 scheme fee: a tap this
+	// small leaves the platform ₦17 down, and the books say so.
+	if got := f.balance(t, ledger.System(), ledger.KindRevenue); got.Minor()-revenueBefore.Minor() != -2500 {
+		t.Errorf("revenue moved %d kobo, want -₦25.00 (the rail's fees, out of the ₦8 scheme fee)", got.Minor()-revenueBefore.Minor())
 	}
 	if s.BankCode != "OPAYNGPC" || s.FintavaBankCode != "090325" {
 		t.Errorf("row carries bank_code %q, fintava_bank_code %q; want the catalogue's and the rail's", s.BankCode, s.FintavaBankCode)
@@ -370,8 +436,8 @@ func TestAQueuedSettlementIsPaidOnce(t *testing.T) {
 	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); !got.IsZero() {
 		t.Errorf("merchant still owed %s after settlement", got)
 	}
-	if paid, _ := PaidFromWallet(ctx, f.Pool, s.SourceAccountNumber); paid.Minor() != owed.Minor() {
-		t.Errorf("PaidFromWallet = %s, want %s", paid, owed)
+	if paid, _ := PaidFromWallet(ctx, f.Pool, s.SourceAccountNumber); paid.Minor() != s.Funded.Minor() {
+		t.Errorf("PaidFromWallet = %s, want %s (the ₦1,600 the sweep relieved the wallet of)", paid, s.Funded)
 	}
 
 	// Nothing left to pay.
@@ -389,7 +455,7 @@ func TestAPendingSettlementIsSettledByTheWebhook(t *testing.T) {
 	ctx := context.Background()
 	merchant := uuid.New()
 	f.verifiedBank(t, merchant)
-	tap, owed := f.nairaTap(t, merchant)
+	tap, _ := f.nairaTap(t, merchant)
 	f.Rail.status = baas.TransferPending
 
 	if paid, _, err := f.Worker.Tick(ctx); err != nil || paid != 1 {
@@ -406,8 +472,8 @@ func TestAPendingSettlementIsSettledByTheWebhook(t *testing.T) {
 	}
 	// And it counts as having left the wallet, so reconciliation adds it
 	// back to the balance the rail reports.
-	if paid, _ := PaidFromWallet(ctx, f.Pool, s.SourceAccountNumber); paid.Minor() != owed.Minor() {
-		t.Errorf("PaidFromWallet while in flight = %s, want %s", paid, owed)
+	if paid, _ := PaidFromWallet(ctx, f.Pool, s.SourceAccountNumber); paid.Minor() != s.Funded.Minor() {
+		t.Errorf("PaidFromWallet while in flight = %s, want %s", paid, s.Funded)
 	}
 
 	ev := &baas.WebhookEvent{
@@ -448,14 +514,20 @@ func TestARefusedSettlementStaysFailedUntilRetried(t *testing.T) {
 		t.Fatalf("Tick: paid=%d err=%v", paid, err)
 	}
 	s := f.row(t, tap)
-	if s.State != Failed || s.Error != "fintava: http 400: insufficient wallet balance" || s.Attempts != 1 {
-		t.Fatalf("row = %+v, want failed with the rail's message", s)
+	if s.State != Failed || s.Attempts != 1 ||
+		s.Error != "fintava: http 400: insufficient wallet balance (swept into the platform wallet under ftv-"+s.Reference+"-sweep; a retry pays the bank from there)" {
+		t.Fatalf("row = %+v, want failed with the rail's message and where the swept money is", s)
+	}
+	if s.SweepRef == "" || f.Rail.swept() != 1 {
+		t.Fatalf("sweep_ref %q after %d sweeps; the sweep stood and must be remembered", s.SweepRef, f.Rail.swept())
 	}
 	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); got.Minor() != owed.Minor() {
 		t.Errorf("merchant owed %s after a refusal, want %s back", got, owed)
 	}
-	if paid, _ := PaidFromWallet(ctx, f.Pool, s.SourceAccountNumber); !paid.IsZero() {
-		t.Errorf("PaidFromWallet after a refusal = %s, want nothing (the money is still in the wallet)", paid)
+	// The bank refused, but the sweep stood: the money left the wallet
+	// for the platform's, and reconciliation must count it as gone.
+	if paid, _ := PaidFromWallet(ctx, f.Pool, s.SourceAccountNumber); paid.Minor() != s.Funded.Minor() {
+		t.Errorf("PaidFromWallet after a refused bank transfer = %s, want %s (the sweep stood)", paid, s.Funded)
 	}
 
 	// Ticks do not retry on their own.
@@ -483,6 +555,9 @@ func TestARefusedSettlementStaysFailedUntilRetried(t *testing.T) {
 	if f.Rail.sent() != 2 || f.Rail.transfers[1].PaymentReference != f.Rail.transfers[0].PaymentReference {
 		t.Fatalf("retry sent under %q, want the same reference %q", f.Rail.transfers[1].PaymentReference, f.Rail.transfers[0].PaymentReference)
 	}
+	if f.Rail.swept() != 1 {
+		t.Fatalf("the retry swept again (%d sweeps); the money was already in the platform's wallet", f.Rail.swept())
+	}
 	s = f.row(t, tap)
 	if s.State != Settled || s.Attempts != 2 {
 		t.Fatalf("row = %+v, want settled on attempt 2", s)
@@ -503,6 +578,8 @@ func TestAShortWalletIsRefusedBeforeTheRailIsAsked(t *testing.T) {
 	merchant := uuid.New()
 	f.verifiedBank(t, merchant)
 	tap, owed := f.nairaTap(t, merchant)
+	// The wallet must cover the sweep plus the rail's sender fee: what the
+	// cardholder was charged. One naira short of it is refused.
 	short := decimalOf(owed).Sub(decimal.NewFromInt(1))
 	f.Rail.held = &short
 
@@ -510,12 +587,13 @@ func TestAShortWalletIsRefusedBeforeTheRailIsAsked(t *testing.T) {
 		t.Fatalf("Tick: paid=%d err=%v", paid, err)
 	}
 	s := f.row(t, tap)
-	want := fmt.Sprintf("the wallet holds ₦%s; the leg is %s", short.StringFixed(2), owed)
+	want := fmt.Sprintf("the wallet holds ₦%s; the sweep needs %s (%s plus the %s fee)",
+		short.StringFixed(2), s.Funded, money.Naira(1_585), money.Naira(15))
 	if s.State != Failed || s.Error != want {
 		t.Fatalf("row = %+v, want failed with %q", s, want)
 	}
-	if f.Rail.sent() != 0 {
-		t.Fatalf("the rail was asked %d times for a leg the wallet cannot cover", f.Rail.sent())
+	if f.Rail.swept() != 0 || f.Rail.sent() != 0 {
+		t.Fatalf("the rail was asked (%d sweeps, %d transfers) for a leg the wallet cannot cover", f.Rail.swept(), f.Rail.sent())
 	}
 	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); got.Minor() != owed.Minor() {
 		t.Errorf("merchant owed %s, want %s still owed", got, owed)
@@ -523,9 +601,9 @@ func TestAShortWalletIsRefusedBeforeTheRailIsAsked(t *testing.T) {
 
 	// Enough for the leg, but the rail throws (its fee, say): the row keeps
 	// the rail's words and what the wallet held beside them.
-	enough := decimalOf(owed)
+	enough := decimalOf(s.Funded)
 	f.Rail.held = &enough
-	f.Rail.transferErr = errors.New("fintava: http 500: An unexpected error occurred")
+	f.Rail.sweepErr = errors.New("fintava: http 500: An unexpected error occurred")
 	if _, err := f.Worker.Retry(ctx, tap); err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +611,7 @@ func TestAShortWalletIsRefusedBeforeTheRailIsAsked(t *testing.T) {
 		t.Fatal(err)
 	}
 	s = f.row(t, tap)
-	want = fmt.Sprintf("fintava: http 500: An unexpected error occurred (the wallet held ₦%s for a %s leg)", enough.StringFixed(2), owed)
+	want = fmt.Sprintf("sweep: fintava: http 500: An unexpected error occurred (the wallet held ₦%s for a %s sweep)", enough.StringFixed(2), money.Naira(1_585))
 	if s.State != Submitted || s.Error != want {
 		t.Fatalf("row = %+v, want submitted with %q", s, want)
 	}

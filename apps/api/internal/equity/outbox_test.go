@@ -203,10 +203,10 @@ func usdcLeg(t *testing.T, pool *pgxpool.Pool, tapID uuid.UUID, state string) {
 func ngnLeg(t *testing.T, pool *pgxpool.Pool, tapID uuid.UUID, state string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `
-		INSERT INTO card_tap_ngn_settlements (tap_id, cardholder_id, merchant_id, source_customer_id,
-		        source_account_number, currency, amount_minor, bank_code, account_number, account_name,
+		INSERT INTO card_tap_ngn_settlements (tap_id, cardholder_id, merchant_id, source_wallet_id,
+		        source_account_number, currency, amount_minor, funded_minor, bank_code, account_number, account_name,
 		        reference, state, settled_at)
-		SELECT id, cardholder_id, merchant_id, 'c', 'a', 'NGN', 1, 'B', '1', 'N', $1::text, $2,
+		SELECT id, cardholder_id, merchant_id, 'w', 'a', 'NGN', 1, 1, 'B', '1', 'N', $1::text, $2,
 		       CASE WHEN $2 = 'settled' THEN now() END
 		  FROM card_taps WHERE id = $3
 		ON CONFLICT (tap_id) DO UPDATE SET state = EXCLUDED.state, settled_at = EXCLUDED.settled_at, updated_at = now()`,

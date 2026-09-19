@@ -54,12 +54,27 @@ type Worker struct {
 	// MerchantName gives the narration the merchant sees on their statement.
 	// Nil, or an empty answer, falls back to a generic one.
 	MerchantName func(ctx context.Context, merchant uuid.UUID) string
-	Now          func() time.Time
+	// SweepFee is what the rail charges the sender of a wallet-to-wallet
+	// transfer, on top of the amount. Zero means DefaultSweepFee. The rail
+	// reports what it actually charged; a difference is logged.
+	SweepFee money.Amount
+	Now      func() time.Time
+}
+
+// DefaultSweepFee is Fintava's flat charge to the sender of a wallet-to-
+// wallet transfer, as observed: ₦15.
+var DefaultSweepFee = money.New(1500, money.NGN)
+
+func (w *Worker) sweepFee() money.Amount {
+	if w.SweepFee.IsPositive() {
+		return w.SweepFee
+	}
+	return DefaultSweepFee
 }
 
 // ErrNoRail means no provider is configured, or the configured one cannot
-// pay out of a customer wallet.
-var ErrNoRail = errors.New("naira: no bank rail that can pay from a wallet is configured")
+// sweep a customer wallet into the platform's and pay a bank from there.
+var ErrNoRail = errors.New("naira: no bank rail that can sweep a wallet and pay a bank is configured")
 
 func (w *Worker) now() time.Time {
 	if w.Now != nil {
@@ -72,7 +87,7 @@ func (w *Worker) now() time.Time {
 // settlements the rail accepted or is still deciding on -- not the ones it
 // refused.
 func (w *Worker) Tick(ctx context.Context) (paid, chased int, err error) {
-	if _, ok := w.Rail.(baas.WalletTransferer); w.Rail == nil || !ok {
+	if _, ok := w.Rail.(baas.WalletSweeper); w.Rail == nil || !ok {
 		return 0, 0, ErrNoRail
 	}
 	if w.Resolver == nil {
@@ -214,7 +229,11 @@ func (w *Worker) failQueued(ctx context.Context, s *Settlement, reason string) e
 	return nil
 }
 
-// submit asks the rail to pay one claimed settlement.
+// submit pays one claimed settlement, in two hops: the tap's naira is swept
+// from the cardholder's wallet into the platform's, and the platform's
+// wallet pays the merchant's bank. The rail's direct wallet-to-bank call
+// answers a customer wallet with a bare 500, whatever it is sent; these two
+// work. A row that was swept on an earlier attempt starts at the second hop.
 func (w *Worker) submit(ctx context.Context, s *Settlement) error {
 	// The bank confirms the name on the account before anything moves. The
 	// account was verified when the merchant saved it; this is what catches
@@ -233,38 +252,119 @@ func (w *Worker) submit(ctx context.Context, s *Settlement) error {
 			"the account now belongs to %q, not %q", enquiry.AccountName, s.AccountName))
 	}
 
-	// What the wallet holds, read before anything is sent. A leg the wallet
-	// cannot cover is refused here with the two figures in the message,
-	// rather than sent to a rail that answers a short wallet with a bare
-	// 500. The rail's own transfer fee is not known until it has charged
-	// it, so a wallet holding the leg but not the fee still reaches the
-	// rail; its answer is then annotated with the balance, so the shortfall
-	// can be read off the row. A balance that cannot be read is not a
-	// reason to hold the payment.
+	if s.SweepRef == "" {
+		if err := w.sweep(ctx, s); err != nil || s.SweepRef == "" {
+			return err
+		}
+	}
+	return w.payBank(ctx, s)
+}
+
+// sweep moves what the tap's naira paid, less the rail's sender fee, from
+// the cardholder's wallet into the platform's: the wallet loses exactly what
+// the cardholder's ledger was debited, fee included. The platform's wallet
+// then holds the leg plus what is left of the scheme fee; a tap too small
+// for its scheme fee to cover the sender fee sweeps less than the leg, and
+// the platform's wallet makes up the difference out of its own fee reserve.
+func (w *Worker) sweep(ctx context.Context, s *Settlement) error {
+	sweeper, ok := w.Rail.(baas.WalletSweeper)
+	if !ok {
+		return w.fail(ctx, s, ErrNoRail.Error())
+	}
+	fee := w.sweepFee()
+	amount, err := s.Funded.Sub(fee)
+	if err != nil || !amount.IsPositive() {
+		return w.fail(ctx, s, fmt.Sprintf(
+			"the naira share %s does not cover the rail's %s sweep fee", s.Funded, fee))
+	}
+	if amount.Minor() < s.Amount.Minor() {
+		slog.Warn("naira: the sweep falls short of the leg; the platform's wallet makes up the difference",
+			"tap", s.TapID, "sweep", amount.String(), "leg", s.Amount.String(), "fee", fee.String())
+	}
+
+	// What the wallet holds, read before anything is sent. A wallet that
+	// cannot cover the sweep and its fee is refused here with the figures in
+	// the message, rather than sent to a rail whose answer may say less. A
+	// balance that cannot be read is not a reason to hold the payment; what
+	// it held is written beside any error the rail gives.
 	held := "unknown"
 	if acct, err := w.Rail.GetAccount(ctx, s.SourceWalletID); err != nil {
-		slog.Warn("naira: could not read wallet balance before paying", "tap", s.TapID, "err", err)
+		slog.Warn("naira: could not read wallet balance before sweeping", "tap", s.TapID, "err", err)
 	} else if acct != nil {
 		held = "₦" + acct.Balance.StringFixed(2)
-		if acct.Balance.LessThan(decimalOf(s.Amount)) {
+		if acct.Balance.LessThan(decimalOf(s.Funded)) {
 			return w.fail(ctx, s, fmt.Sprintf(
-				"the wallet holds %s; the leg is %s", held, s.Amount.String()))
+				"the wallet holds %s; the sweep needs %s (%s plus the %s fee)", held, s.Funded, amount, fee))
 		}
 	}
 
-	transfer, err := w.Rail.(baas.WalletTransferer).TransferFromWallet(ctx, baas.WalletTransferRequest{
-		SourceID:            s.SourceWalletID,
+	receiver, err := sweeper.PlatformWalletAccount(ctx)
+	if err != nil {
+		return w.recordError(ctx, s, fmt.Errorf("sweep: %w", err))
+	}
+	res, err := sweeper.SweepToPlatform(ctx, baas.WalletSweepRequest{
+		SenderAccount:    s.SourceAccountNumber,
+		ReceiverAccount:  receiver,
+		Amount:           decimalOf(amount),
+		Narration:        w.narration(ctx, s.MerchantID),
+		PaymentReference: SweepReference(s.Reference),
+	})
+	if err != nil {
+		return w.recordError(ctx, s, fmt.Errorf("sweep: %w (the wallet held %s for a %s sweep)", err, held, amount))
+	}
+	if res.Status == baas.TransferFailed {
+		msg := res.Message
+		if msg == "" {
+			msg = "the rail refused the sweep"
+		}
+		return w.fail(ctx, s, "sweep: "+msg)
+	}
+	// Accepted, or still deciding: either way the rail has it under a
+	// reference, and money that lands late lands in our own wallet.
+	return w.recordSweep(ctx, s, res.Reference, res.Fees)
+}
+
+// recordSweep writes the rail's acceptance of the sweep on the row. From
+// here a retry starts at the bank transfer.
+func (w *Worker) recordSweep(ctx context.Context, s *Settlement, ref string, fee decimal.Decimal) error {
+	if ref == "" {
+		ref = SweepReference(s.Reference)
+	}
+	charged := w.sweepFee()
+	if !fee.IsZero() {
+		charged = money.New(fee.Shift(2).Round(0).IntPart(), s.Amount.Currency())
+		if charged.Minor() != w.sweepFee().Minor() {
+			slog.Warn("naira: the rail's sweep fee is not the one configured",
+				"tap", s.TapID, "charged", charged.String(), "configured", w.sweepFee().String())
+		}
+	}
+	_, err := w.Pool.Exec(ctx, `
+		UPDATE card_tap_ngn_settlements
+		   SET sweep_ref = $2, swept_at = now(), sweep_fee_minor = $3, error = NULL, updated_at = now()
+		 WHERE tap_id = $1 AND state = 'submitted'`, s.TapID, ref, charged.Minor())
+	if err != nil {
+		return err
+	}
+	s.SweepRef, s.SweepFee = ref, charged
+	now := w.now()
+	s.SweptAt = &now
+	return nil
+}
+
+// payBank pays the merchant's bank from the platform's wallet, under the
+// leg's own reference.
+func (w *Worker) payBank(ctx context.Context, s *Settlement) error {
+	transfer, err := w.Rail.Transfer(ctx, baas.TransferRequest{
 		BeneficiaryBankCode: s.FintavaBankCode,
 		BeneficiaryAccount:  s.AccountNumber,
-		BeneficiaryName:     s.AccountName,
 		Amount:              decimalOf(s.Amount),
 		Narration:           w.narration(ctx, s.MerchantID),
 		PaymentReference:    s.Reference,
 	})
 	if err != nil {
-		return w.recordError(ctx, s, fmt.Errorf("%w (the wallet held %s for a %s leg)", err, held, s.Amount.String()))
+		return w.recordError(ctx, s, err)
 	}
-	return w.apply(ctx, s, transfer.Reference, transfer.Status, transfer.Message)
+	return w.apply(ctx, s, transfer.Reference, transfer.Status, transfer.Message, transfer.Fees)
 }
 
 // narration is what the cardholder's statement says the money went to.
@@ -300,10 +400,10 @@ func (w *Worker) recordError(ctx context.Context, s *Settlement, err error) erro
 
 // apply takes the rail's answer -- from the transfer call, a status check or
 // a webhook -- and moves the row to match.
-func (w *Worker) apply(ctx context.Context, s *Settlement, railRef string, status baas.TransferStatus, message string) error {
+func (w *Worker) apply(ctx context.Context, s *Settlement, railRef string, status baas.TransferStatus, message string, fee decimal.Decimal) error {
 	switch status {
 	case baas.TransferSuccess:
-		return w.settle(ctx, s, railRef)
+		return w.settle(ctx, s, railRef, fee)
 	case baas.TransferFailed:
 		if message == "" {
 			message = "the rail refused the transfer"
@@ -319,21 +419,46 @@ func (w *Worker) apply(ctx context.Context, s *Settlement, railRef string, statu
 }
 
 // settle records the rail's confirmation. The books already say this leg was
-// paid, from the moment it was submitted; this is the row catching up. The
-// state predicate makes a redelivered confirmation find nothing to do.
-func (w *Worker) settle(ctx context.Context, s *Settlement, railRef string) error {
+// paid, from the moment it was submitted; this is the row catching up, and
+// the rail's fees for both hops coming out of the scheme fee. The state
+// predicate makes a redelivered confirmation find nothing to do.
+func (w *Worker) settle(ctx context.Context, s *Settlement, railRef string, fee decimal.Decimal) error {
 	if railRef == "" {
 		railRef = s.Reference
 	}
-	tag, err := w.Pool.Exec(ctx, `
-		UPDATE card_tap_ngn_settlements
-		   SET state = 'settled', rail_ref = COALESCE(rail_ref, $2), error = NULL,
-		       settled_at = now(), updated_at = now()
-		 WHERE tap_id = $1 AND state = 'submitted'`, s.TapID, railRef)
+	railFee := s.RailFee
+	if !fee.IsZero() {
+		railFee = money.New(fee.Shift(2).Round(0).IntPart(), s.Amount.Currency())
+	}
+	settled := false
+	err := movements.InTx(ctx, w.Pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE card_tap_ngn_settlements
+			   SET state = 'settled', rail_ref = COALESCE(rail_ref, $2), rail_fee_minor = $3, error = NULL,
+			       settled_at = now(), updated_at = now()
+			 WHERE tap_id = $1 AND state = 'submitted'`, s.TapID, railRef, railFee.Minor())
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil
+		}
+		settled = true
+		fees, err := s.SweepFee.Add(railFee)
+		if err != nil {
+			return err
+		}
+		if fees.IsPositive() {
+			if _, err := movements.RailFeesPaid(ctx, tx, fees, s.TapID, s.Attempts); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if !settled {
 		if s.State == Failed {
 			// The rail says it paid a transfer we had given up on. The
 			// claim has been returned to the merchant, so the books now
@@ -344,7 +469,7 @@ func (w *Worker) settle(ctx context.Context, s *Settlement, railRef string) erro
 		}
 		return nil
 	}
-	s.State = Settled
+	s.State, s.RailFee = Settled, railFee
 	if w.Settled != nil {
 		w.Settled(ctx, w.Pool, s.TapID)
 	}
@@ -355,6 +480,11 @@ func (w *Worker) settle(ctx context.Context, s *Settlement, railRef string) erro
 // The claim goes back to the merchant, where the audit can see it is still
 // owed, until an operator retries.
 func (w *Worker) fail(ctx context.Context, s *Settlement, reason string) error {
+	if s.SweepRef != "" {
+		// The sweep stood: the tap's naira is in the platform's wallet,
+		// and a retry pays the bank from there without sweeping again.
+		reason += fmt.Sprintf(" (swept into the platform wallet under %s; a retry pays the bank from there)", s.SweepRef)
+	}
 	return movements.InTx(ctx, w.Pool, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE card_tap_ngn_settlements
@@ -409,40 +539,76 @@ func (w *Worker) chaseStale(ctx context.Context) (int, error) {
 
 	chased := 0
 	for _, s := range stale {
-		ref := s.RailRef
-		if ref == "" {
-			ref = s.Reference
-		}
-		status, err := w.Rail.TransferStatus(ctx, ref)
-		if err != nil {
-			slog.Warn("naira: could not chase settlement", "tap", s.TapID, "err", err)
-			continue
-		}
-		switch {
-		case status.Status == baas.TransferPending && status.RawStatus == "not_found" && s.RailRef == "":
-			// The submit's own error, if there was one, is the useful
-			// part of this story; keep it in front of the chase's verdict.
-			why := "the rail has no record of this transfer; retry from the console"
-			if s.Error != "" {
-				why = s.Error + " -- " + why
-			}
-			if err := w.fail(ctx, s, why); err != nil {
-				return chased, err
-			}
-		case status.Status == baas.TransferPending:
-			// Still in flight. Touch it so it is not chased every tick.
-			if _, err := w.Pool.Exec(ctx, `
-				UPDATE card_tap_ngn_settlements SET updated_at = now() WHERE tap_id = $1`, s.TapID); err != nil {
-				return chased, err
-			}
-		default:
-			if err := w.apply(ctx, s, status.Reference, status.Status, status.Message); err != nil {
-				return chased, err
-			}
+		if err := w.chase(ctx, s); err != nil {
+			return chased, err
 		}
 		chased++
 	}
 	return chased, nil
+}
+
+// chase asks the rail about whichever hop the row is waiting on.
+//
+// A row without a sweep reference is waiting on the sweep: one the rail has
+// no record of never happened, and the row fails; one it accepted is
+// recorded and the bank transfer made now. A row with one is waiting on the
+// bank transfer, as before.
+func (w *Worker) chase(ctx context.Context, s *Settlement) error {
+	if s.SweepRef == "" {
+		status, err := w.Rail.TransferStatus(ctx, SweepReference(s.Reference))
+		if err != nil {
+			slog.Warn("naira: could not chase sweep", "tap", s.TapID, "err", err)
+			return nil
+		}
+		switch {
+		case status.Status == baas.TransferPending && status.RawStatus == "not_found":
+			return w.fail(ctx, s, w.noRecord(s, "the rail has no record of the sweep; retry from the console"))
+		case status.Status == baas.TransferFailed:
+			return w.fail(ctx, s, "sweep: "+orDefault(status.Message, "the rail refused the sweep"))
+		default:
+			if err := w.recordSweep(ctx, s, status.Reference, status.Fees); err != nil {
+				return err
+			}
+			return w.payBank(ctx, s)
+		}
+	}
+
+	ref := s.RailRef
+	if ref == "" {
+		ref = s.Reference
+	}
+	status, err := w.Rail.TransferStatus(ctx, ref)
+	if err != nil {
+		slog.Warn("naira: could not chase settlement", "tap", s.TapID, "err", err)
+		return nil
+	}
+	switch {
+	case status.Status == baas.TransferPending && status.RawStatus == "not_found" && s.RailRef == "":
+		return w.fail(ctx, s, w.noRecord(s, "the rail has no record of this transfer; retry from the console"))
+	case status.Status == baas.TransferPending:
+		// Still in flight. Touch it so it is not chased every tick.
+		_, err := w.Pool.Exec(ctx, `
+			UPDATE card_tap_ngn_settlements SET updated_at = now() WHERE tap_id = $1`, s.TapID)
+		return err
+	default:
+		return w.apply(ctx, s, status.Reference, status.Status, status.Message, status.Fees)
+	}
+}
+
+// noRecord is the chase's verdict with the submit's own error, if there was
+// one, kept in front of it: that is the useful part of the story.
+func (w *Worker) noRecord(s *Settlement, verdict string) string {
+	if s.Error != "" {
+		return s.Error + " -- " + verdict
+	}
+	return verdict
+}
+
+func orDefault(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 // ApplyWebhook takes a rail event addressed to a tap settlement and moves the
@@ -465,7 +631,7 @@ func (w *Worker) ApplyWebhook(ctx context.Context, ev *baas.WebhookEvent) (bool,
 	}
 	switch ev.Status {
 	case baas.TransferSuccess, baas.TransferFailed:
-		return true, w.apply(ctx, s, ev.ProviderRef, ev.Status, ev.RawStatus)
+		return true, w.apply(ctx, s, ev.ProviderRef, ev.Status, ev.RawStatus, decimal.Zero)
 	default:
 		return true, nil
 	}

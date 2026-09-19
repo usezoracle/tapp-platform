@@ -372,3 +372,41 @@ func MerchantWalletSettlementReturned(
 		{AccountID: owed, Amount: amount, Reason: "merchant.still_owed"},
 	})
 }
+
+// RailFeesPaid books what the rail charged to deliver a tap's naira leg:
+// the sweep fee taken from the cardholder's wallet on top of the sweep, and
+// the bank transfer fee taken from the platform's wallet. Both come out of
+// the scheme fee the tap earned, which is the only money of the platform's
+// in either wallet; a tap too small for its fee to cover them leaves the
+// platform down the difference, and the books say so.
+//
+// Keyed on the tap and the attempt that settled, so a redelivered
+// confirmation books nothing twice.
+func RailFeesPaid(
+	ctx context.Context,
+	tx pgx.Tx,
+	fees money.Amount,
+	tapID uuid.UUID,
+	attempt int,
+) (uuid.UUID, error) {
+	if !fees.IsPositive() {
+		return uuid.Nil, fmt.Errorf("movements: rail fees must be positive, got %s", fees)
+	}
+
+	c := fees.Currency()
+	r := newResolver(ctx, tx)
+	revenue := r.account(ledger.System(), ledger.KindRevenue, c)
+	external := r.account(ledger.System(), ledger.KindExternal, c)
+	if r.err != nil {
+		return uuid.Nil, r.err
+	}
+
+	return ledger.Post(ctx, tx, ledger.Ref{
+		Type:    "rail_fees_paid",
+		ID:      &tapID,
+		IdemKey: fmt.Sprintf("rail_fees_paid:%s:%d", tapID, attempt),
+	}, []ledger.Entry{
+		{AccountID: revenue, Amount: fees.Neg(), Reason: "scheme_fee.rail_fees"},
+		{AccountID: external, Amount: fees, Reason: "rail.fees_charged"},
+	})
+}

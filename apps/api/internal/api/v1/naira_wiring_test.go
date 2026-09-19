@@ -294,27 +294,31 @@ func TestReconcileAddsBackWhatTheWalletPaidOut(t *testing.T) {
 	ctx := context.Background()
 
 	// ₦100,000 was credited by the fixture from this rail; a ₦1,600 tap has
-	// paid ₦1,592 to a merchant out of the wallet, so the rail now holds
-	// ₦98,408.
+	// been swept out of the wallet -- ₦1,585 to the platform's wallet plus
+	// the rail's ₦15 sender fee -- to pay a merchant, so the rail now holds
+	// ₦98,400.
 	id, err := w.charge(t, money.Naira(1_600), money.Naira(1_600))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.pool.Exec(ctx, `UPDATE card_tap_ngn_settlements SET state = 'settled' WHERE tap_id = $1`, id); err != nil {
+	if _, err := w.pool.Exec(ctx, `
+		UPDATE card_tap_ngn_settlements
+		   SET state = 'settled', sweep_ref = 'ftv-sweep', swept_at = now(), sweep_fee_minor = 1500
+		 WHERE tap_id = $1`, id); err != nil {
 		t.Fatal(err)
 	}
-	rail := &stubRail{walletID: "wal-ada", balance: decimal.RequireFromString("98408")}
+	rail := &stubRail{walletID: "wal-ada", balance: decimal.RequireFromString("98400")}
 
 	res, err := ReconcileNGNDeposit(ctx, rail, w.account)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.PaidOut.Minor() != 159_200 || res.CreditedBefore.Minor() != 10_000_000 || !res.Posted.IsZero() {
-		t.Fatalf("reconcile = %+v; want ₦1,592 paid out and nothing posted", res)
+	if res.PaidOut.Minor() != 160_000 || res.CreditedBefore.Minor() != 10_000_000 || !res.Posted.IsZero() {
+		t.Fatalf("reconcile = %+v; want ₦1,600 paid out and nothing posted", res)
 	}
 
 	// A credit the webhook missed shows up as the difference.
-	rail.balance = decimal.RequireFromString("98908")
+	rail.balance = decimal.RequireFromString("98900")
 	res, err = ReconcileNGNDeposit(ctx, rail, w.account)
 	if err != nil {
 		t.Fatal(err)

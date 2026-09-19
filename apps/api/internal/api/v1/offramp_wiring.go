@@ -134,7 +134,7 @@ func RecordTapSettlement(s *offramp.Settler) func(context.Context, pgx.Tx, tap.C
 		ngn, usdc := c.Legs()
 
 		if ngn.IsPositive() {
-			if err := naira.Record(ctx, tx, c.TapID, c.Cardholder, c.Merchant, nairaRail(), ngn); err != nil {
+			if err := naira.Record(ctx, tx, c.TapID, c.Cardholder, c.Merchant, nairaRail(), ngn, c.Funding.NGN); err != nil {
 				return err
 			}
 		}

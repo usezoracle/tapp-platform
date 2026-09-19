@@ -10,6 +10,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+
+	"github.com/shopspring/decimal"
 
 	"github.com/usezoracle/tapp/api/services/baas"
 )
@@ -30,6 +33,9 @@ import (
 //   - Unknown transfer statuses normalise to PENDING, never success.
 type Adapter struct {
 	c *Client
+
+	mu              sync.Mutex
+	platformAccount string
 }
 
 // NewAdapter wraps a configured client.
@@ -157,6 +163,56 @@ func (a *Adapter) TransferFromWallet(ctx context.Context, req baas.WalletTransfe
 		Message:          res.Message,
 		CreditAccount:    req.BeneficiaryAccount,
 	}, nil
+}
+
+// SweepToPlatform moves money from a customer wallet into the merchant
+// (platform) wallet, by account number.
+func (a *Adapter) SweepToPlatform(ctx context.Context, req baas.WalletSweepRequest) (*baas.Transfer, error) {
+	if req.PaymentReference == "" || req.SenderAccount == "" || req.ReceiverAccount == "" {
+		return nil, fmt.Errorf("fintava: a sweep needs a sender, a receiver and a payment reference")
+	}
+	res, err := a.c.WalletToWallet(ctx, req.PaymentReference, req.Amount, req.SenderAccount, req.ReceiverAccount, req.Narration)
+	if err != nil {
+		return nil, err
+	}
+	return &baas.Transfer{
+		Reference:        orDefault(res.AnyReference(), req.PaymentReference),
+		PaymentReference: req.PaymentReference,
+		Amount:           req.Amount,
+		Fees:             feeOf(res),
+		Status:           normalizeStatus(res.Status),
+		RawStatus:        res.Status,
+		Message:          res.Message,
+		CreditAccount:    req.ReceiverAccount,
+	}, nil
+}
+
+// PlatformWalletAccount is the merchant wallet's account number, read once
+// from /merchant/balance and kept: it does not change.
+func (a *Adapter) PlatformWalletAccount(ctx context.Context) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.platformAccount != "" {
+		return a.platformAccount, nil
+	}
+	w, err := a.c.MerchantBalance(ctx)
+	if err != nil {
+		return "", err
+	}
+	if w.AccountNumber == "" {
+		return "", fmt.Errorf("fintava: the merchant wallet has no account number")
+	}
+	a.platformAccount = w.AccountNumber
+	return a.platformAccount, nil
+}
+
+// feeOf is what the rail charged for a transfer, under whichever name it
+// reported it.
+func feeOf(res *TransferResult) decimal.Decimal {
+	if !res.TransactionFee.IsZero() {
+		return res.TransactionFee.Decimal
+	}
+	return res.Charges.Decimal
 }
 
 // TransferStatus looks a transfer up by reference.

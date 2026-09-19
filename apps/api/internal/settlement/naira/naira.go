@@ -82,6 +82,13 @@ func Reference(tapID uuid.UUID) string {
 	return baas.PaymentReference("tap", tapID.String()) + referenceSuffix
 }
 
+// SweepReference is the idempotency key for the sweep that precedes a leg's
+// bank transfer: the leg's reference with a suffix, so the two hops can be
+// looked up separately and a sweep's webhook never routes as the transfer's.
+func SweepReference(reference string) string {
+	return reference + "-sweep"
+}
+
 // ReferencePrefix and referenceSuffix are what Reference produces, for
 // routing a webhook back to the tap.
 const (
@@ -112,9 +119,16 @@ func tapOf(reference string) (uuid.UUID, bool) {
 // Either refusal fails the tap, which rolls the charge back.
 //
 // Idempotent on the tap: a second call for the same tap changes nothing.
-func Record(ctx context.Context, tx pgx.Tx, tapID, cardholder, merchant uuid.UUID, rail string, owed money.Amount) error {
+//
+// funded is what the cardholder's naira paid for the tap -- the leg plus the
+// scheme fee -- and so what their wallet holds for it and must be relieved
+// of. It is never less than owed.
+func Record(ctx context.Context, tx pgx.Tx, tapID, cardholder, merchant uuid.UUID, rail string, owed, funded money.Amount) error {
 	if !owed.IsPositive() {
 		return fmt.Errorf("naira: a settlement must be positive, got %s", owed)
+	}
+	if funded.Minor() < owed.Minor() || funded.Currency() != owed.Currency() {
+		return fmt.Errorf("naira: the naira funding %s must cover the leg %s", funded, owed)
 	}
 	if rail == "" {
 		return ErrNoWallet
@@ -154,11 +168,11 @@ func Record(ctx context.Context, tx pgx.Tx, tapID, cardholder, merchant uuid.UUI
 	_, err = tx.Exec(ctx, `
 		INSERT INTO card_tap_ngn_settlements
 			(tap_id, cardholder_id, merchant_id, source_wallet_id, source_account_number,
-			 currency, amount_minor, bank_code, account_number, account_name, reference)
-		VALUES ($1, $2, $3, $4, $5, $6::currency, $7, $8, $9, $10, $11)
+			 currency, amount_minor, funded_minor, bank_code, account_number, account_name, reference)
+		VALUES ($1, $2, $3, $4, $5, $6::currency, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (tap_id) DO NOTHING`,
 		tapID, cardholder, merchant, walletID, sourceAccount,
-		string(owed.Currency()), owed.Minor(), bankCode, accountNumber, accountName, Reference(tapID))
+		string(owed.Currency()), owed.Minor(), funded.Minor(), bankCode, accountNumber, accountName, Reference(tapID))
 	if err != nil {
 		return fmt.Errorf("naira: record settlement: %w", err)
 	}
@@ -176,6 +190,9 @@ type Settlement struct {
 	SourceWalletID      string
 	SourceAccountNumber string
 	Amount              money.Amount
+	// Funded is what the cardholder's naira paid for the tap: the leg plus
+	// the scheme fee. The wallet holds it and is relieved of exactly it.
+	Funded money.Amount
 
 	// BankCode is the catalogue's institution code the merchant's account
 	// was saved with. FintavaBankCode is the rail's own code for the same
@@ -189,8 +206,18 @@ type Settlement struct {
 	Reference string
 	State     string
 	Attempts  int
-	RailRef   string
-	Error     string
+	// SweepRef is the rail's reference for the sweep into the platform's
+	// wallet, once accepted; SweptAt when; SweepFee what it charged the
+	// cardholder's wallet on top. Empty until the sweep has been made: a
+	// row with one is retried from the bank transfer, not from the sweep.
+	SweepRef string
+	SweptAt  *time.Time
+	SweepFee money.Amount
+	// RailRef is the rail's reference for the bank transfer; RailFee what
+	// it charged the platform's wallet for it.
+	RailRef string
+	RailFee money.Amount
+	Error   string
 
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -200,26 +227,34 @@ type Settlement struct {
 
 const settlementSelect = `
 	SELECT tap_id, cardholder_id, merchant_id, source_wallet_id, source_account_number,
-	       currency::text, amount_minor,
+	       currency::text, amount_minor, funded_minor,
 	       bank_code, coalesce(fintava_bank_code, ''), account_number, account_name,
-	       reference, state, attempts, coalesce(rail_ref, ''), coalesce(error, ''),
+	       reference, state, attempts,
+	       coalesce(sweep_ref, ''), swept_at, coalesce(sweep_fee_minor, 0),
+	       coalesce(rail_ref, ''), coalesce(rail_fee_minor, 0), coalesce(error, ''),
 	       created_at, updated_at, submitted_at, settled_at
 	  FROM card_tap_ngn_settlements`
 
 func scanSettlement(row pgx.Row) (*Settlement, error) {
 	var (
-		s     Settlement
-		cur   string
-		minor int64
+		s                                Settlement
+		cur                              string
+		minor, funded, sweepFee, railFee int64
 	)
 	if err := row.Scan(&s.TapID, &s.CardholderID, &s.MerchantID, &s.SourceWalletID, &s.SourceAccountNumber,
-		&cur, &minor,
+		&cur, &minor, &funded,
 		&s.BankCode, &s.FintavaBankCode, &s.AccountNumber, &s.AccountName,
-		&s.Reference, &s.State, &s.Attempts, &s.RailRef, &s.Error,
+		&s.Reference, &s.State, &s.Attempts,
+		&s.SweepRef, &s.SweptAt, &sweepFee,
+		&s.RailRef, &railFee, &s.Error,
 		&s.CreatedAt, &s.UpdatedAt, &s.SubmittedAt, &s.SettledAt); err != nil {
 		return nil, err
 	}
-	s.Amount = money.New(minor, money.Currency(cur))
+	c := money.Currency(cur)
+	s.Amount = money.New(minor, c)
+	s.Funded = money.New(funded, c)
+	s.SweepFee = money.New(sweepFee, c)
+	s.RailFee = money.New(railFee, c)
 	return &s, nil
 }
 
@@ -266,14 +301,17 @@ func List(ctx context.Context, q Querier, state string, limit int) ([]*Settlemen
 }
 
 // PaidFromWallet is what has left a cardholder's wallet to pay merchants:
-// every leg sourced from it that the rail did not refuse. Reconciliation
-// adds it back to the wallet's balance to recover what was ever deposited.
+// what every tap swept out of it -- the leg plus the scheme fee, which with
+// the rail's sender fee is what the sweep relieved the wallet of -- whatever
+// became of the bank transfer after. A leg the rail never swept has left
+// nothing. Reconciliation adds it back to the wallet's balance to recover
+// what was ever deposited.
 func PaidFromWallet(ctx context.Context, q Querier, accountNumber string) (money.Amount, error) {
 	var minor int64
 	err := q.QueryRow(ctx, `
-		SELECT coalesce(sum(amount_minor), 0)
+		SELECT coalesce(sum(funded_minor), 0)
 		  FROM card_tap_ngn_settlements
-		 WHERE source_account_number = $1 AND state IN ('submitted', 'settled')`, accountNumber).Scan(&minor)
+		 WHERE source_account_number = $1 AND sweep_ref IS NOT NULL`, accountNumber).Scan(&minor)
 	if err != nil {
 		return money.Amount{}, fmt.Errorf("naira: paid from %s: %w", accountNumber, err)
 	}

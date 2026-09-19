@@ -377,6 +377,31 @@ func (c *Client) CustomerTransfer(ctx context.Context, sourceID, customerReferen
 	return &out, nil
 }
 
+// WalletToWallet moves money between two Fintava wallets, by account number:
+// POST /transaction/wallet-to-wallet. The rail charges the SENDER a flat fee
+// on top of the amount ("you need ₦1,000,015" for ₦1,000,000), reported back
+// as transaction_fee.
+func (c *Client) WalletToWallet(ctx context.Context, customerReference string, amount decimal.Decimal, senderAccount, receiverAccount, narration string) (*TransferResult, error) {
+	body := map[string]any{
+		"senderAccount":     senderAccount,
+		"receiverAccount":   receiverAccount,
+		"amount":            amountNumber(amount),
+		"narration":         narration,
+		"CustomerReference": customerReference, // documented capitalised, as on the merchant transfer
+	}
+	var out TransferResult
+	if err := c.do(ctx, http.MethodPost, "/transaction/wallet-to-wallet", body, &out); err != nil {
+		return nil, err
+	}
+	slog.Info("fintava: wallet-to-wallet accepted",
+		"reference", customerReference, "rail_id", out.ID, "rail_ref", out.Reference,
+		"amount", amount.String(), "fee", out.TransactionFee.String())
+	if out.AnyReference() == "" {
+		return nil, &APIError{StatusCode: 502, Message: "fintava: wallet-to-wallet answered without a transaction id or reference"}
+	}
+	return &out, nil
+}
+
 // TransactionByReference looks a transaction up by reference (vendor
 // reference, or our CustomerReference where Fintava indexes it).
 func (c *Client) TransactionByReference(ctx context.Context, ref string) (*TransferResult, error) {

@@ -249,6 +249,29 @@ type WalletTransferer interface {
 	TransferFromWallet(ctx context.Context, req WalletTransferRequest) (*Transfer, error)
 }
 
+// WalletSweepRequest moves money between two accounts AT the rail: from a
+// customer wallet to the platform's own wallet, by their account numbers.
+// PaymentReference is the idempotency key, as on TransferRequest.
+type WalletSweepRequest struct {
+	SenderAccount    string
+	ReceiverAccount  string
+	Amount           decimal.Decimal
+	Narration        string
+	PaymentReference string
+}
+
+// WalletSweeper is implemented by rails that can move money between two of
+// their own wallets, and say which wallet is the platform's. It is how a
+// customer wallet pays a bank on a rail whose direct wallet-to-bank call
+// does not work: the exact amount is swept into the platform's wallet, and
+// the platform's wallet pays the bank (Provider.Transfer). The platform's
+// wallet only ever relays what was just swept; it funds nothing itself.
+type WalletSweeper interface {
+	SweepToPlatform(ctx context.Context, req WalletSweepRequest) (*Transfer, error)
+	// PlatformWalletAccount is the account number sweeps are received on.
+	PlatformWalletAccount(ctx context.Context) (string, error)
+}
+
 // CustomerLocator is WalletLocator's fuller form: it finds both handles a
 // customer wallet has at the rail -- the customer id a transfer is sourced
 // from, and the wallet id a balance is read by -- from what a row opened
