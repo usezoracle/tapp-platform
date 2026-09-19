@@ -152,7 +152,7 @@ export default function PayCheckoutPage({
               Sign in to pay
             </Button>
             <p className="text-center text-xs leading-relaxed text-[var(--fg-muted)]">
-              You&apos;re paying from your Tapp balance. Nothing leaves it until
+              You&apos;re paying from your Freedom balance. Nothing leaves it until
               you confirm.
             </p>
           </div>

@@ -32,19 +32,16 @@ const dmSans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Tapp — Tap. Pay. Done.",
-  description:
-    "Customers tap to pay in USDC. Merchants get money in their bank — without ever touching crypto.",
+  title: "Freedom",
+  description: "Tap, pay, and own a piece of the shop.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
-    title: "Tapp by Zoracle Labs",
+    title: "Freedom",
     statusBarStyle: "default",
   },
-  icons: {
-    icon: "/favicon.ico",
-    apple: "/icon-192.png",
-  },
+  // Icons come from the file conventions in app/: icon.svg + icon.png
+  // (favicon), favicon.ico (legacy), apple-icon.png (home screen).
 };
 
 export const viewport: Viewport = {

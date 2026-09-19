@@ -7,7 +7,7 @@ import { DuotoneIcon } from "./DuotoneIcon";
 import { tileClasses } from "./Styles";
 
 /**
- * The one line on the wallet for somebody with no Tapp Card yet: what it
+ * The one line on the wallet for somebody with no Freedom Card yet: what it
  * is, and the one thing to do about it. Ordering a card is a text link
  * under the sentence, not a second button -- two equal buttons for one
  * decision make a person choose before they know which applies.
@@ -19,10 +19,10 @@ export function CardPrompt() {
         <DuotoneIcon name="card" className="hue-text" />
       </span>
       <span className="grid min-w-0 flex-1 gap-0.5">
-        <span className="text-sm font-medium text-fg">Link your Tapp Card</span>
+        <span className="text-sm font-medium text-fg">Link your Freedom Card</span>
         <span className="text-xs leading-4 text-fg-muted">Tap to pay from this balance.</span>
         <a
-          href="mailto:labs@zoracle.xyz?subject=Order%20a%20Tapp%20Card"
+          href="mailto:labs@zoracle.xyz?subject=Order%20a%20Freedom%20Card"
           className="focus-ring w-fit rounded-sm text-xs leading-4 text-accent hover:underline"
         >
           Order a card

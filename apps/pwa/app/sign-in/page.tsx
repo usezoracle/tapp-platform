@@ -32,8 +32,8 @@ export default function SignInPage() {
 type AuthMode = "sign-in" | "sign-up" | "forgot-password" | "reset-code";
 
 const COPY: Record<AuthMode, { title: string; subtitle: (email: string) => string; cta: string }> = {
-  "sign-in":         { title: "Sign in",        subtitle: () => "Your Tapp balance and card.",             cta: "Sign in" },
-  "sign-up":         { title: "Create account", subtitle: () => "A Tapp account, ready in a minute.",      cta: "Create account" },
+  "sign-in":         { title: "Sign in",        subtitle: () => "Your Freedom wallet and card.",             cta: "Sign in" },
+  "sign-up":         { title: "Create account", subtitle: () => "A Freedom account, ready in a minute.",      cta: "Create account" },
   "forgot-password": { title: "Reset password", subtitle: () => "We will email you a 6-digit code.",       cta: "Send code" },
   "reset-code":      { title: "New password",   subtitle: (e) => `Enter the code sent to ${e}.`,           cta: "Update password and sign in" },
 };
@@ -146,7 +146,7 @@ function SignInBody() {
   return (
     <Screen className="py-4">
       <AnimatedComponent variant={slideInOut} className="grid gap-6">
-        <Logo />
+        <Logo className="h-6" />
 
         <PageHeader
           title={copy.title}

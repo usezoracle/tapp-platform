@@ -155,10 +155,10 @@ function NoTokenState() {
 
         <div className="space-y-2">
           <h1 className="text-xl font-semibold text-neutral-900 dark:text-white">
-            Activate your Tapp Card
+            Activate your Freedom Card
           </h1>
           <p className="text-xs leading-relaxed text-gray-500 dark:text-white/60">
-            Hold your physical Tapp Card against the back of your phone to pair it with your wallet.
+            Hold your physical Freedom Card against the back of your phone to pair it with your wallet.
           </p>
         </div>
 

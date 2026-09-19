@@ -141,7 +141,7 @@ export default function SettingsPage() {
               <SettingsRow
                 href="/settings/card"
                 icon={<PiCreditCardBold />}
-                title="Tapp Card"
+                title="Freedom Card"
                 subtitle={card.data ? "Manage your physical card" : "Link a card to tap and pay"}
                 trailing={
                   card.data ? (

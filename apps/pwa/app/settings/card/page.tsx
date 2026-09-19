@@ -54,7 +54,7 @@ export default function SettingsCardPage() {
         </Link>
 
         <div className="space-y-2">
-          <h1 className="text-xl font-medium">Linked Tapp Card</h1>
+          <h1 className="text-xl font-medium">Linked Freedom Card</h1>
           <p className="text-sm text-gray-500 dark:text-white/50">
             Manage your physical contactless card.
           </p>
@@ -82,13 +82,13 @@ function NoCardState() {
           No card linked
         </p>
         <p className="mt-1 text-xs">
-          Tap your physical Tapp Card to the back of your phone, or open
+          Tap your physical Freedom Card to the back of your phone, or open
           the activation link printed on the card.
         </p>
       </InfoBanner>
       <div className="grid gap-2 w-full">
         <Link href="/link" className="w-full">
-          <Button>Link a Tapp Card</Button>
+          <Button>Link a Freedom Card</Button>
         </Link>
       </div>
     </>

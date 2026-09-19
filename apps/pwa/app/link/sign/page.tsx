@@ -127,7 +127,7 @@ function Body() {
           <>
             <div className="loader" />
             <p className="text-sm text-gray-500 dark:text-white/50">
-              Finalizing with Tapp…
+              Finalizing with Freedom…
             </p>
           </>
         ) : phase === "done" ? (

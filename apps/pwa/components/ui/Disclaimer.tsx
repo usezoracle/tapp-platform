@@ -52,13 +52,13 @@ export function Disclaimer() {
             </div>
             <div className="space-y-3 text-sm leading-relaxed text-neutral-600 dark:text-white/80">
               <p>
-                Tapp is in early access. Card linking, top-ups, and merchant
+                Freedom is in early access. Card linking, top-ups, and merchant
                 taps run against the Sui network — operations are real and
                 balances move on-chain.
               </p>
               <p>
                 Use small amounts while we iterate. Keep your Google account
-                secure: it&apos;s the only key to your Tapp&apos;s spending cap.
+                secure: it&apos;s the only key to your Freedom spending cap.
                 We&apos;ll never ask for your PIN.
               </p>
             </div>

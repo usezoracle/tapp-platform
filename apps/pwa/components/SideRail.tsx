@@ -6,14 +6,14 @@ import { cn } from "@/lib/utils";
 import { NAV_ITEMS, hueStyle } from "@/lib/nav";
 import { DuotoneIcon } from "@/components/ui/DuotoneIcon";
 import { useSession } from "@/lib/auth";
-import { TappMark } from "@/components/ui/Logo";
+import { Logo } from "@/components/ui/Logo";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { Web3Avatar } from "@/components/ui/Web3Avatar";
 
 /**
  * The left rail, from 768px up. It replaces both the bottom tabs and the
  * top navbar on those widths, so everything the two of them carried lives
- * here: the mark, who is signed in, the places to go, the theme, and the
+ * here: the wordmark, who is signed in, the places to go, the theme, and the
  * way out. The places come from lib/nav.ts, shared with the tabs.
  */
 const itemClasses =
@@ -33,14 +33,8 @@ export function SideRail() {
         href="/"
         className="focus-ring m-2 flex h-11 items-center gap-2.5 rounded-md px-2 hover:bg-hover"
       >
-        <TappMark className="size-6" />
         <span className="grid min-w-0 flex-1">
-          <span
-            className="truncate text-sm font-bold italic leading-5 tracking-tight text-fg"
-            style={{ fontFamily: "var(--font-dm-sans), var(--font-sans)" }}
-          >
-            tapp
-          </span>
+          <Logo className="h-5" />
           <span className="truncate text-xs leading-4 text-fg-muted">{session?.email ?? ""}</span>
         </span>
         {session ? <Web3Avatar address={session.email} size={20} /> : null}
