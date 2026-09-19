@@ -26,7 +26,10 @@ export type DuotoneName =
   | "hourglass"
   | "sign-out"
   | "warning"
-  | "link";
+  | "link"
+  | "id-card"
+  | "selfie"
+  | "check";
 
 interface Glyph {
   /** The 22% body. */
@@ -98,6 +101,23 @@ const GLYPHS: Record<DuotoneName, Glyph> = {
     fill: "M2.5 8.5A2.5 2.5 0 0 1 5 6h9a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 14 18H5a2.5 2.5 0 0 1-2.5-2.5Z",
     stroke:
       "M2.5 8.5A2.5 2.5 0 0 1 5 6h9a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 14 18H5a2.5 2.5 0 0 1-2.5-2.5Z M2.5 10.5h14 M19 9v6 M16 12h6",
+  },
+  // The verification ladder: the BVN card, the photograph, the finished
+  // state. The body of the card and the disc take the wash; the portrait
+  // and the tick are the detail.
+  "id-card": {
+    fill: "M2.5 7A2.5 2.5 0 0 1 5 4.5h14A2.5 2.5 0 0 1 21.5 7v10a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 17Z",
+    stroke:
+      "M2.5 7A2.5 2.5 0 0 1 5 4.5h14A2.5 2.5 0 0 1 21.5 7v10a2.5 2.5 0 0 1-2.5 2.5H5A2.5 2.5 0 0 1 2.5 17Z M8.5 9.25a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z M5.5 16.5a3 3 0 0 1 6 0 M14 10h4.5 M14 14h4.5",
+  },
+  selfie: {
+    fill: "M12 6.5a3.25 3.25 0 1 1 0 6.5 3.25 3.25 0 0 1 0-6.5Z M7 19.5a5 5 0 0 1 10 0Z",
+    stroke:
+      "M12 6.5a3.25 3.25 0 1 1 0 6.5 3.25 3.25 0 0 1 0-6.5Z M7 19.5a5 5 0 0 1 10 0 M2.5 7.5V4.5a2 2 0 0 1 2-2h2 M17.5 2.5h2a2 2 0 0 1 2 2v3 M2.5 16.5v3a2 2 0 0 0 2 2h2 M17.5 21.5h2a2 2 0 0 0 2-2v-3",
+  },
+  check: {
+    fill: "M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18Z",
+    stroke: "M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18Z M8 12.5l2.75 2.75L16.5 9.5",
   },
 };
 

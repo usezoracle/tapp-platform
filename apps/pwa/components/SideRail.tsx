@@ -28,16 +28,20 @@ export function SideRail() {
       aria-label="Primary"
       className="fixed inset-y-0 left-0 z-20 hidden w-rail flex-col border-r border-line bg-surface transition-colors md:flex"
     >
-      {/* The brand, alone at the top; who is signed in lives at the foot. */}
+      {/* The brand, alone at the top; who is signed in lives at the foot.
+          Everything here sits on the 8px grid: 8px from the rail's edge to
+          the 64px row, 8px from the row to the nav. The row's px-2 puts the
+          mark's box on the same 16px line as the items' glyphs, so the mark
+          and the icons below it share a left edge. */}
       <Link
         href="/"
-        className="focus-ring m-2 flex h-16 items-center rounded-md px-3 hover:bg-hover"
+        className="focus-ring m-2 flex h-16 items-center rounded-md px-2 hover:bg-hover"
         aria-label="Freedom home"
       >
         <Logo className="h-11" />
       </Link>
 
-      <nav className="mt-2 grid gap-px px-2">
+      <nav className="grid gap-px px-2">
         {NAV_ITEMS.map((item) => {
           const active = item.match(pathname);
           return (

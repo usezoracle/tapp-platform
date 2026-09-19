@@ -12,6 +12,7 @@ import { MovementList, mergeFeed, daysAgo } from "@/components/ui/MovementList";
 import { InfoBanner } from "@/components/ui/InfoBanner";
 import { TodayStrip, cardTile, sharesTile, pendingTile, type Tile } from "@/components/ui/TodayStrip";
 import { CardPrompt } from "@/components/ui/CardPrompt";
+import { VerifyPrompt } from "@/components/ui/VerifyPrompt";
 import { PortfolioChart } from "@/components/ui/PortfolioChart";
 import { EmptyState } from "@/components/ui/Surface";
 import { CrossFade } from "@/components/ui/CrossFade";
@@ -89,6 +90,8 @@ export function WalletScreen() {
 
   return (
     <Screen>
+      {/* The first-run ask, over the wallet, for somebody not yet verified. */}
+      <VerifyPrompt />
       <AnimatedComponent variant={slideInOut} className={cn(stackClasses, "py-4")}>
         {/* Who is signed in. On the phone it is the one place that says so;
             from 768px the rail says it, so the screen takes a title instead. */}

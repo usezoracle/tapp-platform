@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { TAB_ITEMS, hueStyle, type NavItem } from "@/lib/nav";
+import { TAB_ITEMS, hueStyle, isAuthRoute, type NavItem } from "@/lib/nav";
 import { DuotoneIcon } from "@/components/ui/DuotoneIcon";
 import { useSession } from "@/lib/auth";
 import { SPRINGS, useHaptic, useMotionPrefs } from "@/lib/motion";
@@ -21,7 +21,7 @@ const PROMINENT = "/cash";
 
 export function shouldShowBottomNav(pathname: string): boolean {
   if (pathname.startsWith("/demo-deck")) return false;
-  if (pathname.startsWith("/sign-in")) return false;
+  if (isAuthRoute(pathname)) return false;
   if (pathname.startsWith("/link")) return false;
   // A payment request opened from somebody else's phone is a single-purpose
   // screen. Offering navigation away from it mid-payment is an invitation to

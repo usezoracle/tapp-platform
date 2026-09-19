@@ -1,6 +1,15 @@
 import type { CSSProperties } from "react";
 import type { DuotoneName } from "@/components/ui/DuotoneIcon";
 
+/**
+ * The screens that sign somebody in. They carry no navigation, and the
+ * page draws the wordmark itself, so the navbar keeps its brand off them:
+ * one logo on a screen, not two.
+ */
+export function isAuthRoute(pathname: string): boolean {
+  return pathname.startsWith("/sign-in");
+}
+
 export interface NavItem {
   href: string;
   label: string;

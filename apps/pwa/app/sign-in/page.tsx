@@ -146,7 +146,9 @@ function SignInBody() {
   return (
     <Screen className="py-4">
       <AnimatedComponent variant={slideInOut} className="grid gap-6">
-        <Logo className="h-6" />
+        {/* The one wordmark on this screen (the navbar keeps its own off
+            auth routes): 56px, centred, and 32px above the title. */}
+        <Logo className="mx-auto mb-2 h-14" />
 
         <PageHeader
           title={copy.title}
