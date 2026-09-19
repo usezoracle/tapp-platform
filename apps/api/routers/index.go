@@ -36,6 +36,11 @@ import (
 )
 
 // RegisterRoutes add all routing list here automatically get main router
+// tapService is the one wired tap service: the merchant app charges and
+// reverses through it, and so does the console, so a reversal from either
+// leaves the books — and the exchange — in the same shape.
+var tapService *tap.Service
+
 func RegisterRoutes(route *gin.Engine) {
 
 	route.NoRoute(func(ctx *gin.Context) {
@@ -336,30 +341,28 @@ func senderRoutes(route *gin.Engine) {
 	// predecessor applied a hardcoded 100 basis points inline, with a comment
 	// apologising for it.
 	offrampSettler := apiv1.SharedSettler()
-	tapHandler := &apiv1.TapHandler{
-		Svc: &tap.Service{
-			Pool: storage.Pool,
-			Fee:  tap.BasisPointFee(config.OrderConfig().CardFeeBPS),
-			// Balances are held as they arrive -- USDC, so dollars -- and the
-			// exchange happens here, at the till, for the amount actually
-			// being spent. Converting at deposit instead would leave the
-			// platform long naira against money nobody has spent yet.
-			Funding: money.Currency(viper.GetString("FUNDING_CURRENCY")),
-			Quoter:  apiv1.SharedQuoter(),
-			// The tap records what has to be settled and where the money
-			// came from; the wiring splits it between the rails. What was
-			// bought with USDC is sold a moment later from the cardholder's
-			// own account; what came from a naira balance is paid out of
-			// the cardholder's own naira wallet.
-			Settle: apiv1.RecordTapSettlement(offrampSettler),
-			// And that the equity market has to hear of it. Queued in the
-			// tap's transaction, delivered by a worker; nil without a
-			// market, and the tap package never learns one exists.
-			Equity:         apiv1.RecordTapEquity(apiv1.SharedEquity()),
-			EquityReversal: apiv1.RecordReversalEquity(apiv1.SharedEquity()),
-		},
-		Merchant: apiv1.MerchantFromContext,
+	tapService = &tap.Service{
+		Pool: storage.Pool,
+		Fee:  tap.BasisPointFee(config.OrderConfig().CardFeeBPS),
+		// Balances are held as they arrive -- USDC, so dollars -- and the
+		// exchange happens here, at the till, for the amount actually
+		// being spent. Converting at deposit instead would leave the
+		// platform long naira against money nobody has spent yet.
+		Funding: money.Currency(viper.GetString("FUNDING_CURRENCY")),
+		Quoter:  apiv1.SharedQuoter(),
+		// The tap records what has to be settled and where the money
+		// came from; the wiring splits it between the rails. What was
+		// bought with USDC is sold a moment later from the cardholder's
+		// own account; what came from a naira balance is paid out of
+		// the cardholder's own naira wallet.
+		Settle: apiv1.RecordTapSettlement(offrampSettler),
+		// And that the equity market has to hear of it. Queued in the
+		// tap's transaction, delivered by a worker; nil without a
+		// market, and the tap package never learns one exists.
+		Equity:         apiv1.RecordTapEquity(apiv1.SharedEquity()),
+		EquityReversal: apiv1.RecordReversalEquity(apiv1.SharedEquity()),
 	}
+	tapHandler := &apiv1.TapHandler{Svc: tapService, Merchant: apiv1.MerchantFromContext}
 	me.GET("tap-card/nonce", tapHandler.Challenge)
 	me.POST("tap-card", tapHandler.Debit)
 	me.POST("tap-card/:tap_id/token-ack", tapHandler.Acknowledge)
@@ -500,6 +503,7 @@ func cardsRoutes(route *gin.Engine) {
 	txCtrl := adminCtrl.NewTransactionsController()
 	adminConsole.GET("transactions", txCtrl.GetTransactions)
 	adminConsole.GET("transactions/:id", txCtrl.GetTransaction)
+	adminConsole.POST("transactions/:id/reverse", (&adminCtrl.ReverseTapController{Svc: tapService}).ReverseTap)
 
 	integratorsCtrl := adminCtrl.NewIntegratorsController()
 	adminConsole.POST("integrators", integratorsCtrl.CreateIntegrator)
