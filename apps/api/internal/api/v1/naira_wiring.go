@@ -10,6 +10,7 @@ import (
 
 	"github.com/usezoracle/tapp/api/ent/fiatcurrency"
 	"github.com/usezoracle/tapp/api/ent/institution"
+	"github.com/usezoracle/tapp/api/internal/money"
 	"github.com/usezoracle/tapp/api/internal/settlement/naira"
 	"github.com/usezoracle/tapp/api/services/baas"
 	"github.com/usezoracle/tapp/api/storage"
@@ -83,6 +84,10 @@ func SharedNairaWorker() *naira.Worker {
 			MerchantName: func(ctx context.Context, merchant uuid.UUID) string {
 				return MerchantName(ctx, merchant)
 			},
+			// The rail's flat charges, in kobo, as observed on its wallet
+			// balances; it reports neither. Override when they change.
+			SweepFee: money.New(viper.GetInt64("NGN_SWEEP_FEE_KOBO"), money.NGN),
+			BankFee:  money.New(viper.GetInt64("NGN_BANK_FEE_KOBO"), money.NGN),
 		}
 	})
 	return nairaWorker

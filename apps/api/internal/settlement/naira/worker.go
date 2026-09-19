@@ -58,18 +58,34 @@ type Worker struct {
 	// transfer, on top of the amount. Zero means DefaultSweepFee. The rail
 	// reports what it actually charged; a difference is logged.
 	SweepFee money.Amount
-	Now      func() time.Time
+	// BankFee is what the rail charges the platform's wallet for a bank
+	// transfer, booked when the rail's answer does not carry the fee (it
+	// does not: Fintava deducts it and reports nothing). Zero means
+	// DefaultBankFee.
+	BankFee money.Amount
+	Now     func() time.Time
 }
 
-// DefaultSweepFee is Fintava's flat charge to the sender of a wallet-to-
-// wallet transfer, as observed: ₦15.
-var DefaultSweepFee = money.New(1500, money.NGN)
+// DefaultSweepFee and DefaultBankFee are Fintava's flat charges as observed
+// on its wallet balances: ₦15 to the sender of a wallet-to-wallet transfer,
+// ₦30.75 to the merchant wallet for a transfer to a bank.
+var (
+	DefaultSweepFee = money.New(1500, money.NGN)
+	DefaultBankFee  = money.New(3075, money.NGN)
+)
 
 func (w *Worker) sweepFee() money.Amount {
 	if w.SweepFee.IsPositive() {
 		return w.SweepFee
 	}
 	return DefaultSweepFee
+}
+
+func (w *Worker) bankFee() money.Amount {
+	if w.BankFee.IsPositive() {
+		return w.BankFee
+	}
+	return DefaultBankFee
 }
 
 // ErrNoRail means no provider is configured, or the configured one cannot
@@ -282,19 +298,33 @@ func (w *Worker) sweep(ctx context.Context, s *Settlement) error {
 			"tap", s.TapID, "sweep", amount.String(), "leg", s.Amount.String(), "fee", fee.String())
 	}
 
-	// What the wallet holds, read before anything is sent. A wallet that
-	// cannot cover the sweep and its fee is refused here with the figures in
-	// the message, rather than sent to a rail whose answer may say less. A
-	// balance that cannot be read is not a reason to hold the payment; what
-	// it held is written beside any error the rail gives.
+	// What the wallet holds, read before anything is sent. A wallet short
+	// of the sweep and its fee by more than the fee is refused here with
+	// the figures in the message, rather than sent to a rail whose answer
+	// may say less: money has left it by a path this system did not
+	// record, and that wants an operator. Short by less is dust between
+	// the ledger and the wallet -- a rounding the ledger credited that the
+	// rail never held -- and the sweep takes what is there, the platform's
+	// wallet making up the rest, as it does for a small tap's fees. A
+	// balance that cannot be read is not a reason to hold the payment;
+	// what it held is written beside any error the rail gives.
 	held := "unknown"
 	if acct, err := w.Rail.GetAccount(ctx, s.SourceWalletID); err != nil {
 		slog.Warn("naira: could not read wallet balance before sweeping", "tap", s.TapID, "err", err)
 	} else if acct != nil {
 		held = "₦" + acct.Balance.StringFixed(2)
-		if acct.Balance.LessThan(decimalOf(s.Funded)) {
-			return w.fail(ctx, s, fmt.Sprintf(
-				"the wallet holds %s; the sweep needs %s (%s plus the %s fee)", held, s.Funded, amount, fee))
+		if short := decimalOf(s.Funded).Sub(acct.Balance); short.IsPositive() {
+			if short.GreaterThan(decimalOf(fee)) {
+				return w.fail(ctx, s, fmt.Sprintf(
+					"the wallet holds %s; the sweep needs %s (%s plus the %s fee)", held, s.Funded, amount, fee))
+			}
+			amount = money.New(acct.Balance.Sub(decimalOf(fee)).Shift(2).Round(0).IntPart(), s.Amount.Currency())
+			if !amount.IsPositive() {
+				return w.fail(ctx, s, fmt.Sprintf(
+					"the wallet holds %s; the sweep needs %s (%s plus the %s fee)", held, s.Funded, amount, fee))
+			}
+			slog.Warn("naira: the wallet is short of what the tap paid by dust; sweeping what it holds",
+				"tap", s.TapID, "held", held, "funded", s.Funded.String(), "short", "₦"+short.StringFixed(2), "sweep", amount.String())
 		}
 	}
 
@@ -429,6 +459,10 @@ func (w *Worker) settle(ctx context.Context, s *Settlement, railRef string, fee 
 	railFee := s.RailFee
 	if !fee.IsZero() {
 		railFee = money.New(fee.Shift(2).Round(0).IntPart(), s.Amount.Currency())
+	}
+	if !railFee.IsPositive() {
+		// The rail said nothing of its fee; it charged the configured one.
+		railFee = w.bankFee()
 	}
 	settled := false
 	err := movements.InTx(ctx, w.Pool, func(tx pgx.Tx) error {

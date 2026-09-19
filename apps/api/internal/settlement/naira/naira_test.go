@@ -96,6 +96,9 @@ type fakeRail struct {
 	transferErr error
 	transfers   []baas.TransferRequest
 	chase       *baas.Transfer
+	// bankFee is what a bank transfer reports as its fee; nil means ₦10.
+	bankFee    decimal.Decimal
+	bankFeeSet bool
 	// chaseSweep is what a status check of the sweep says; nil means the
 	// rail has no record of it.
 	chaseSweep *baas.Transfer
@@ -146,7 +149,7 @@ func (f *fakeRail) Transfer(_ context.Context, req baas.TransferRequest) (*baas.
 	}
 	return &baas.Transfer{
 		Reference: "ftv-" + req.PaymentReference, PaymentReference: req.PaymentReference,
-		Amount: req.Amount, Fees: decimal.NewFromInt(10), Status: f.status, Message: f.message,
+		Amount: req.Amount, Fees: f.reportedBankFee(), Status: f.status, Message: f.message,
 	}, nil
 }
 
@@ -161,6 +164,13 @@ func (f *fakeRail) TransferStatus(_ context.Context, ref string) (*baas.Transfer
 		return f.chase, nil
 	}
 	return &baas.Transfer{Reference: ref, Status: baas.TransferPending, RawStatus: "not_found"}, nil
+}
+
+func (f *fakeRail) reportedBankFee() decimal.Decimal {
+	if f.bankFeeSet {
+		return f.bankFee
+	}
+	return decimal.NewFromInt(10)
 }
 
 // sent counts bank transfers asked of the rail.
@@ -579,8 +589,9 @@ func TestAShortWalletIsRefusedBeforeTheRailIsAsked(t *testing.T) {
 	f.verifiedBank(t, merchant)
 	tap, owed := f.nairaTap(t, merchant)
 	// The wallet must cover the sweep plus the rail's sender fee: what the
-	// cardholder was charged. One naira short of it is refused.
-	short := decimalOf(owed).Sub(decimal.NewFromInt(1))
+	// cardholder was charged. Short of it by more than the fee -- more than
+	// dust -- is refused.
+	short := decimalOf(owed).Sub(decimal.NewFromInt(20))
 	f.Rail.held = &short
 
 	if paid, _, err := f.Worker.Tick(ctx); err != nil || paid != 0 {
@@ -614,6 +625,36 @@ func TestAShortWalletIsRefusedBeforeTheRailIsAsked(t *testing.T) {
 	want = fmt.Sprintf("sweep: fintava: http 500: An unexpected error occurred (the wallet held ₦%s for a %s sweep)", enough.StringFixed(2), money.Naira(1_585))
 	if s.State != Submitted || s.Error != want {
 		t.Fatalf("row = %+v, want submitted with %q", s, want)
+	}
+}
+
+// A wallet short of what the tap paid by no more than the sweep fee is dust
+// between the ledger and the rail: the sweep takes what the wallet holds
+// less the fee, and the platform's wallet makes up the rest. The rail
+// reports no fee for the bank transfer, so the configured one is booked.
+func TestDustIsSweptAndTheBankFeeIsBooked(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	merchant := uuid.New()
+	f.verifiedBank(t, merchant)
+	tap, _ := f.nairaTap(t, merchant)
+	held := decimal.RequireFromString("1599.32") // 68 kobo short of the ₦1,600 charged
+	f.Rail.held = &held
+	f.Rail.bankFee, f.Rail.bankFeeSet = decimal.Zero, true
+	revenueBefore := f.balance(t, ledger.System(), ledger.KindRevenue)
+
+	if paid, _, err := f.Worker.Tick(ctx); err != nil || paid != 1 {
+		t.Fatalf("Tick: paid=%d err=%v", paid, err)
+	}
+	if f.Rail.swept() != 1 || f.Rail.sweeps[0].Amount.String() != "1584.32" {
+		t.Fatalf("sweeps = %+v, want one of 1584.32 (what the wallet held less the ₦15 fee)", f.Rail.sweeps)
+	}
+	s := f.row(t, tap)
+	if s.State != Settled || s.RailFee.Minor() != DefaultBankFee.Minor() {
+		t.Fatalf("row = %+v, want settled with the configured ₦30.75 bank fee", s)
+	}
+	if got := f.balance(t, ledger.System(), ledger.KindRevenue); got.Minor()-revenueBefore.Minor() != -(1500 + 3075) {
+		t.Errorf("revenue moved %d kobo, want -4575 (₦15 sweep fee and ₦30.75 bank fee)", got.Minor()-revenueBefore.Minor())
 	}
 }
 
