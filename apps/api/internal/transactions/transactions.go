@@ -138,8 +138,12 @@ const (
 // State is one vocabulary over two facts -- whether Freedom has been told,
 // and what it did:
 //
-//	queued     in the outbox, not yet acknowledged by the market
+//	held       awaiting settlement: the market is told only once the
+//	           merchant has been paid, and they have not been yet
+//	queued     settled; in the outbox, not yet acknowledged by the market
 //	failed     delivery was given up on; an operator has to look
+//	cancelled  the tap was reversed before the market heard of it; nothing
+//	           was sent and nothing will be
 //	escrowed   delivered; the merchant is not listed, so the funding accrues
 //	pending    delivered; the funding waits for a session with a price
 //	allocated  shares were bought: Units of Symbol at Price
@@ -154,8 +158,10 @@ type Equity struct {
 
 // Equity states.
 const (
+	EquityHeld      = "held"
 	EquityQueued    = "queued"
 	EquityFailed    = "failed"
+	EquityCancelled = "cancelled"
 	EquityEscrowed  = "escrowed"
 	EquityPending   = "pending"
 	EquityAllocated = "allocated"
@@ -169,10 +175,16 @@ func equityFrom(tapState, reverseState *string, response []byte) *Equity {
 	}
 	e := &Equity{State: EquityQueued}
 	switch *tapState {
+	case equity.StateHeld:
+		e.State = EquityHeld
+		return e
+	case equity.StateQueued:
+		return e
 	case equity.StateFailed:
 		e.State = EquityFailed
 		return e
-	case equity.StatePending:
+	case equity.StateCancelled:
+		e.State = EquityCancelled
 		return e
 	}
 

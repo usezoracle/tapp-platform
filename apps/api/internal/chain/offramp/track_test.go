@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/usezoracle/tapp/api/internal/equity"
 	"github.com/usezoracle/tapp/api/internal/ledger"
 	"github.com/usezoracle/tapp/api/internal/ledger/movements"
 	"github.com/usezoracle/tapp/api/internal/money"
@@ -337,6 +338,36 @@ func TestAFulfilledOrderIsSimplyDone(t *testing.T) {
 	}
 	if got := owedTo(t, pool, merchant); !got.IsZero() {
 		t.Errorf("merchant owed %s after fulfilment", got)
+	}
+}
+
+// The merchant being paid is what earns the fee that buys the cardholder's
+// shares, so fulfilment is what releases the tap to the equity market.
+func TestAFulfilledOrderReleasesTheTapToTheMarket(t *testing.T) {
+	pool := testPool(t)
+	r := &fakeReader{
+		receipts: map[string]*types.Receipt{
+			txA: {Status: types.ReceiptStatusSuccessful, Logs: []*types.Log{&realLog}},
+		},
+		info: orderInfoReturn(true, false),
+	}
+	s := trackingSettler(pool, r)
+	tap, _, _, _ := submittedTap(t, pool, s, txA)
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO equity_outbox (kind, tap_id, state, payload) VALUES ('tap', $1, 'held', '{}')`, tap); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.Track(context.Background()); err != nil {
+		t.Fatalf("Track: %v", err)
+	}
+	var state string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT state FROM equity_outbox WHERE tap_id = $1 AND kind = 'tap'`, tap).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != equity.StateQueued {
+		t.Errorf("outbox row = %s after fulfilment, want queued", state)
 	}
 }
 

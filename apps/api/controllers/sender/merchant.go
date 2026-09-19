@@ -27,6 +27,7 @@ import (
 	"github.com/usezoracle/tapp/api/ent/institution"
 	"github.com/usezoracle/tapp/api/ent/merchantbankaccount"
 	"github.com/usezoracle/tapp/api/ent/senderprofile"
+	apiv1 "github.com/usezoracle/tapp/api/internal/api/v1"
 	svc "github.com/usezoracle/tapp/api/services"
 	"github.com/usezoracle/tapp/api/storage"
 	"github.com/usezoracle/tapp/api/types"
@@ -46,12 +47,16 @@ type saveBankAccountPayload struct {
 }
 
 type bankAccountResponse struct {
-	ID            uuid.UUID  `json:"id"`
-	Currency      string     `json:"currency"`
-	BankCode      string     `json:"bank_code"`
-	AccountNumber string     `json:"account_number"`
-	AccountName   string     `json:"account_name"`
-	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
+	ID            uuid.UUID `json:"id"`
+	Currency      string    `json:"currency"`
+	BankCode      string    `json:"bank_code"`
+	AccountNumber string    `json:"account_number"`
+	AccountName   string    `json:"account_name"`
+	// FintavaBankCode is the naira rail's own code for bank_code, resolved
+	// when the account was saved. Absent when the rail does not list the
+	// bank; a payout to it will fail until it does.
+	FintavaBankCode string     `json:"fintava_bank_code,omitempty"`
+	VerifiedAt      *time.Time `json:"verified_at,omitempty"`
 }
 
 // SaveMerchantBankAccount upserts the merchant's payout account.
@@ -110,6 +115,17 @@ func (ctrl *SenderController) SaveMerchantBankAccount(ctx *gin.Context) {
 		return
 	}
 
+	// The code the naira rail knows this bank by, stored alongside the
+	// catalogue's. Not resolving is not a reason to refuse the save -- the
+	// settlement worker resolves again before every payout, and the rail's
+	// list changes -- but it is logged, because a payout to this account
+	// will fail until the rail lists the bank.
+	fintavaCode, _, err := apiv1.SharedBankCodeResolver().FintavaCode(ctx, payload.BankCode)
+	if err != nil {
+		logger.Warnf("SaveMerchantBankAccount: no rail code for %s (%s): %v", inst.Name, payload.BankCode, err)
+		fintavaCode = ""
+	}
+
 	now := time.Now()
 	existing, err := storage.Client.MerchantBankAccount.
 		Query().
@@ -119,19 +135,27 @@ func (ctrl *SenderController) SaveMerchantBankAccount(ctx *gin.Context) {
 	var saved *ent.MerchantBankAccount
 	switch {
 	case err == nil:
-		saved, err = existing.Update().
+		upd := existing.Update().
 			SetCurrency(payload.Currency).
 			SetBankCode(payload.BankCode).
 			SetAccountNumber(payload.AccountNumber).
 			SetAccountName(payload.AccountName).
-			SetVerifiedAt(now).
-			Save(ctx)
+			SetVerifiedAt(now)
+		// A bank that changed to one the rail cannot pay must not keep the
+		// old bank's rail code.
+		if fintavaCode != "" {
+			upd.SetFintavaBankCode(fintavaCode)
+		} else {
+			upd.ClearFintavaBankCode()
+		}
+		saved, err = upd.Save(ctx)
 	case ent.IsNotFound(err):
 		saved, err = storage.Client.MerchantBankAccount.Create().
 			SetCurrency(payload.Currency).
 			SetBankCode(payload.BankCode).
 			SetAccountNumber(payload.AccountNumber).
 			SetAccountName(payload.AccountName).
+			SetNillableFintavaBankCode(nilIfEmpty(fintavaCode)).
 			SetVerifiedAt(now).
 			SetSenderProfile(sender).
 			Save(ctx)
@@ -264,6 +288,13 @@ func writeSSE(w io.Writer, ev svc.PaymentEvent) {
 
 var ngnAccountNumberRegex = regexp.MustCompile(`^[0-9]{10}$`)
 
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 func bankAccountResponseFromEnt(row *ent.MerchantBankAccount) bankAccountResponse {
 	resp := bankAccountResponse{
 		ID:            row.ID,
@@ -271,6 +302,9 @@ func bankAccountResponseFromEnt(row *ent.MerchantBankAccount) bankAccountRespons
 		BankCode:      row.BankCode,
 		AccountNumber: row.AccountNumber,
 		AccountName:   row.AccountName,
+	}
+	if row.FintavaBankCode != nil {
+		resp.FintavaBankCode = *row.FintavaBankCode
 	}
 	if row.VerifiedAt != nil {
 		t := *row.VerifiedAt

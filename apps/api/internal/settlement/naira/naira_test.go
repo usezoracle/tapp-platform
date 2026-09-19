@@ -77,6 +77,10 @@ type fakeRail struct {
 	mu sync.Mutex
 
 	accountName string
+	// banks is what ListBanks answers; nil means the rail lists nothing.
+	banks []baas.Bank
+	// enquiries records the bank code each name enquiry was asked with.
+	enquiries []string
 
 	status      baas.TransferStatus
 	message     string
@@ -89,6 +93,9 @@ type fakeRail struct {
 func (f *fakeRail) Name() string { return "fintava" }
 
 func (f *fakeRail) NameEnquiry(_ context.Context, bankCode, account string) (*baas.NameEnquiry, error) {
+	f.mu.Lock()
+	f.enquiries = append(f.enquiries, bankCode)
+	f.mu.Unlock()
 	return &baas.NameEnquiry{AccountNumber: account, AccountName: f.accountName, BankCode: bankCode}, nil
 }
 
@@ -122,7 +129,11 @@ func (f *fakeRail) sent() int {
 func (f *fakeRail) Transfer(context.Context, baas.TransferRequest) (*baas.Transfer, error) {
 	return nil, errors.New("a naira leg must be paid from the cardholder's wallet, not the platform's account")
 }
-func (f *fakeRail) ListBanks(context.Context) ([]baas.Bank, error)             { return nil, nil }
+func (f *fakeRail) ListBanks(context.Context) ([]baas.Bank, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.banks, nil
+}
 func (f *fakeRail) ListAccounts(context.Context, bool) ([]baas.Account, error) { return nil, nil }
 func (f *fakeRail) GetAccount(context.Context, string) (*baas.Account, error)  { return nil, nil }
 func (f *fakeRail) InitiateIdentity(context.Context, baas.IdentityInit) (*baas.IdentityResult, error) {
@@ -147,9 +158,16 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	pool := testPool(t)
-	rail := &fakeRail{accountName: "OLUMIDE SILAS OGUNDELE", status: baas.TransferSuccess}
+	rail := &fakeRail{accountName: "OLUMIDE SILAS OGUNDELE", status: baas.TransferSuccess, banks: fintavaBanks}
 	return &fixture{Pool: pool, Rail: rail, Worker: &Worker{
 		Pool: pool, Rail: rail,
+		// The catalogue as seeded, and the rail's list read through the
+		// rail itself -- as production wires it.
+		Resolver: &BankCodeResolver{
+			Banks:        rail.ListBanks,
+			Institutions: func(context.Context) ([]Institution, error) { return paycrestInstitutions, nil },
+			TTL:          time.Nanosecond, // every tick reads the rail's current list
+		},
 		MerchantName: func(context.Context, uuid.UUID) string { return "Mama Put" },
 	}}
 }
@@ -172,14 +190,20 @@ func (f *fixture) wallet(t *testing.T, cardholder uuid.UUID, customerID string) 
 	return accountNumber
 }
 
-// verifiedBank gives a merchant the account the fixture's rail will name.
+// verifiedBank gives a merchant the account the fixture's rail will name,
+// at OPay under the catalogue's code, as the app saves it.
 func (f *fixture) verifiedBank(t *testing.T, merchant uuid.UUID) {
+	t.Helper()
+	f.verifiedBankAt(t, merchant, "OPAYNGPC")
+}
+
+func (f *fixture) verifiedBankAt(t *testing.T, merchant uuid.UUID, bankCode string) {
 	t.Helper()
 	if _, err := f.Pool.Exec(context.Background(), `
 		INSERT INTO merchant_bank_accounts (id, currency, bank_code, account_number, account_name,
 		                                    verified_at, sender_profile_merchant_bank_account, created_at, updated_at)
-		VALUES ($1, 'NGN', 'OPAYNGPC', '9034409271', 'OLUMIDE SILAS OGUNDELE', now(), $2, now(), now())`,
-		uuid.New(), merchant); err != nil {
+		VALUES ($1, 'NGN', $3, '9034409271', 'OLUMIDE SILAS OGUNDELE', now(), $2, now(), now())`,
+		uuid.New(), merchant, bankCode); err != nil {
 		t.Fatalf("bank: %v", err)
 	}
 }
@@ -318,7 +342,7 @@ func TestAQueuedSettlementIsPaidOnce(t *testing.T) {
 	}
 	sent := f.Rail.transfers[0]
 	if sent.PaymentReference != s.Reference || sent.SourceID != s.SourceCustomerID ||
-		sent.BeneficiaryAccount != "9034409271" || sent.BeneficiaryBankCode != "OPAYNGPC" ||
+		sent.BeneficiaryAccount != "9034409271" || sent.BeneficiaryBankCode != "090325" ||
 		sent.BeneficiaryName != "OLUMIDE SILAS OGUNDELE" || sent.Narration != "Tapp: Mama Put" {
 		t.Fatalf("rail was asked %+v; want the tap's reference, from the cardholder's wallet, to the merchant's verified bank", sent)
 	}
@@ -329,6 +353,9 @@ func TestAQueuedSettlementIsPaidOnce(t *testing.T) {
 	s = f.row(t, tap)
 	if s.State != Settled || s.Attempts != 1 || s.RailRef != "ftv-"+s.Reference || s.SettledAt == nil {
 		t.Fatalf("row after payout = %+v, want settled", s)
+	}
+	if s.BankCode != "OPAYNGPC" || s.FintavaBankCode != "090325" {
+		t.Errorf("row carries bank_code %q, fintava_bank_code %q; want the catalogue's and the rail's", s.BankCode, s.FintavaBankCode)
 	}
 	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); !got.IsZero() {
 		t.Errorf("merchant still owed %s after settlement", got)
@@ -515,3 +542,87 @@ func TestARailWithoutWalletsPaysNothing(t *testing.T) {
 
 // pooledRail is a provider with no wallets to pay from.
 type pooledRail struct{ baas.Provider }
+
+// The production failure. A merchant saved Moniepoint under the catalogue's
+// code, MONINGPC, and the rail was asked to pay to it: it could not resolve
+// the account, and the leg failed. The rail must be asked with its own
+// code, 090405, for both the name enquiry and the transfer, and the row
+// must say so.
+func TestTheRailIsAskedWithItsOwnBankCode(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	merchant := uuid.New()
+	f.verifiedBankAt(t, merchant, "MONINGPC")
+	tap, _ := f.nairaTap(t, merchant)
+
+	if paid, _, err := f.Worker.Tick(ctx); err != nil || paid != 1 {
+		t.Fatalf("Tick: paid=%d err=%v", paid, err)
+	}
+	if len(f.Rail.enquiries) != 1 || f.Rail.enquiries[0] != "090405" {
+		t.Fatalf("name enquiry asked with %v, want 090405", f.Rail.enquiries)
+	}
+	if f.Rail.sent() != 1 || f.Rail.transfers[0].BeneficiaryBankCode != "090405" {
+		t.Fatalf("transfer sent to bank %q, want 090405", f.Rail.transfers[0].BeneficiaryBankCode)
+	}
+	s := f.row(t, tap)
+	if s.State != Settled || s.BankCode != "MONINGPC" || s.FintavaBankCode != "090405" {
+		t.Fatalf("row = %+v, want settled with bank_code MONINGPC and fintava_bank_code 090405", s)
+	}
+}
+
+// A bank the rail has no code for is never sent to it under the code we
+// have. The leg fails before anything is claimed, with the institution's
+// name, the merchant is still owed, and a retry says the same until the
+// rail lists the bank -- after which the retry pays it.
+func TestAnUnmappedBankFailsTheLegWithoutSendingAnything(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	merchant := uuid.New()
+	f.verifiedBankAt(t, merchant, "SFHVNGLA")
+	tap, owed := f.nairaTap(t, merchant)
+
+	if paid, _, err := f.Worker.Tick(ctx); err != nil || paid != 0 {
+		t.Fatalf("Tick: paid=%d err=%v", paid, err)
+	}
+	if f.Rail.sent() != 0 || len(f.Rail.enquiries) != 0 {
+		t.Fatalf("the rail was asked (%d enquiries, %d transfers); an unmapped code must never reach it", len(f.Rail.enquiries), f.Rail.sent())
+	}
+	s := f.row(t, tap)
+	want := "no Fintava sort code for Safe Haven Microfinance Bank (SFHVNGLA)"
+	if s.State != Failed || s.Error != want || s.Attempts != 0 || s.FintavaBankCode != "" {
+		t.Fatalf("row = %+v, want failed with %q, no attempt, no rail code", s, want)
+	}
+	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); got.Minor() != owed.Minor() {
+		t.Errorf("merchant owed %s, want %s (nothing was discharged)", got, owed)
+	}
+
+	// Retrying before the rail lists the bank is refused with the reason.
+	var unmapped *UnmappedBankError
+	if _, err := f.Worker.Retry(ctx, tap); !errors.As(err, &unmapped) {
+		t.Fatalf("Retry = %v, want *UnmappedBankError", err)
+	}
+	if s := f.row(t, tap); s.State != Failed {
+		t.Fatalf("row after refused retry = %+v, want still failed", s)
+	}
+
+	// The rail lists the bank; the retry re-resolves and pays.
+	f.Rail.mu.Lock()
+	f.Rail.banks = append(append([]baas.Bank{}, fintavaBanks...), baas.Bank{Name: "SAFE HAVEN MICROFINANCE BANK", BankCode: "090286"})
+	f.Rail.mu.Unlock()
+	if _, err := f.Worker.Retry(ctx, tap); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	if paid, _, err := f.Worker.Tick(ctx); err != nil || paid != 1 {
+		t.Fatalf("Tick after retry: paid=%d err=%v", paid, err)
+	}
+	if f.Rail.sent() != 1 || f.Rail.transfers[0].BeneficiaryBankCode != "090286" || f.Rail.enquiries[0] != "090286" {
+		t.Fatalf("after retry: enquiries %v, transfers %+v; want 090286", f.Rail.enquiries, f.Rail.transfers)
+	}
+	s = f.row(t, tap)
+	if s.State != Settled || s.Attempts != 1 || s.FintavaBankCode != "090286" {
+		t.Fatalf("row = %+v, want settled on attempt 1 under 090286", s)
+	}
+	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); !got.IsZero() {
+		t.Errorf("merchant owed %s after settlement", got)
+	}
+}

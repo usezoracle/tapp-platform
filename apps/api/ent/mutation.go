@@ -9316,6 +9316,7 @@ type MerchantBankAccountMutation struct {
 	bank_code             *string
 	account_number        *string
 	account_name          *string
+	fintava_bank_code     *string
 	verified_at           *time.Time
 	clearedFields         map[string]struct{}
 	sender_profile        *uuid.UUID
@@ -9645,6 +9646,55 @@ func (m *MerchantBankAccountMutation) ResetAccountName() {
 	m.account_name = nil
 }
 
+// SetFintavaBankCode sets the "fintava_bank_code" field.
+func (m *MerchantBankAccountMutation) SetFintavaBankCode(s string) {
+	m.fintava_bank_code = &s
+}
+
+// FintavaBankCode returns the value of the "fintava_bank_code" field in the mutation.
+func (m *MerchantBankAccountMutation) FintavaBankCode() (r string, exists bool) {
+	v := m.fintava_bank_code
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFintavaBankCode returns the old "fintava_bank_code" field's value of the MerchantBankAccount entity.
+// If the MerchantBankAccount object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *MerchantBankAccountMutation) OldFintavaBankCode(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFintavaBankCode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFintavaBankCode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFintavaBankCode: %w", err)
+	}
+	return oldValue.FintavaBankCode, nil
+}
+
+// ClearFintavaBankCode clears the value of the "fintava_bank_code" field.
+func (m *MerchantBankAccountMutation) ClearFintavaBankCode() {
+	m.fintava_bank_code = nil
+	m.clearedFields[merchantbankaccount.FieldFintavaBankCode] = struct{}{}
+}
+
+// FintavaBankCodeCleared returns if the "fintava_bank_code" field was cleared in this mutation.
+func (m *MerchantBankAccountMutation) FintavaBankCodeCleared() bool {
+	_, ok := m.clearedFields[merchantbankaccount.FieldFintavaBankCode]
+	return ok
+}
+
+// ResetFintavaBankCode resets all changes to the "fintava_bank_code" field.
+func (m *MerchantBankAccountMutation) ResetFintavaBankCode() {
+	m.fintava_bank_code = nil
+	delete(m.clearedFields, merchantbankaccount.FieldFintavaBankCode)
+}
+
 // SetVerifiedAt sets the "verified_at" field.
 func (m *MerchantBankAccountMutation) SetVerifiedAt(t time.Time) {
 	m.verified_at = &t
@@ -9767,7 +9817,7 @@ func (m *MerchantBankAccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *MerchantBankAccountMutation) Fields() []string {
-	fields := make([]string, 0, 7)
+	fields := make([]string, 0, 8)
 	if m.created_at != nil {
 		fields = append(fields, merchantbankaccount.FieldCreatedAt)
 	}
@@ -9785,6 +9835,9 @@ func (m *MerchantBankAccountMutation) Fields() []string {
 	}
 	if m.account_name != nil {
 		fields = append(fields, merchantbankaccount.FieldAccountName)
+	}
+	if m.fintava_bank_code != nil {
+		fields = append(fields, merchantbankaccount.FieldFintavaBankCode)
 	}
 	if m.verified_at != nil {
 		fields = append(fields, merchantbankaccount.FieldVerifiedAt)
@@ -9809,6 +9862,8 @@ func (m *MerchantBankAccountMutation) Field(name string) (ent.Value, bool) {
 		return m.AccountNumber()
 	case merchantbankaccount.FieldAccountName:
 		return m.AccountName()
+	case merchantbankaccount.FieldFintavaBankCode:
+		return m.FintavaBankCode()
 	case merchantbankaccount.FieldVerifiedAt:
 		return m.VerifiedAt()
 	}
@@ -9832,6 +9887,8 @@ func (m *MerchantBankAccountMutation) OldField(ctx context.Context, name string)
 		return m.OldAccountNumber(ctx)
 	case merchantbankaccount.FieldAccountName:
 		return m.OldAccountName(ctx)
+	case merchantbankaccount.FieldFintavaBankCode:
+		return m.OldFintavaBankCode(ctx)
 	case merchantbankaccount.FieldVerifiedAt:
 		return m.OldVerifiedAt(ctx)
 	}
@@ -9885,6 +9942,13 @@ func (m *MerchantBankAccountMutation) SetField(name string, value ent.Value) err
 		}
 		m.SetAccountName(v)
 		return nil
+	case merchantbankaccount.FieldFintavaBankCode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFintavaBankCode(v)
+		return nil
 	case merchantbankaccount.FieldVerifiedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -9922,6 +9986,9 @@ func (m *MerchantBankAccountMutation) AddField(name string, value ent.Value) err
 // mutation.
 func (m *MerchantBankAccountMutation) ClearedFields() []string {
 	var fields []string
+	if m.FieldCleared(merchantbankaccount.FieldFintavaBankCode) {
+		fields = append(fields, merchantbankaccount.FieldFintavaBankCode)
+	}
 	if m.FieldCleared(merchantbankaccount.FieldVerifiedAt) {
 		fields = append(fields, merchantbankaccount.FieldVerifiedAt)
 	}
@@ -9939,6 +10006,9 @@ func (m *MerchantBankAccountMutation) FieldCleared(name string) bool {
 // error if the field is not defined in the schema.
 func (m *MerchantBankAccountMutation) ClearField(name string) error {
 	switch name {
+	case merchantbankaccount.FieldFintavaBankCode:
+		m.ClearFintavaBankCode()
+		return nil
 	case merchantbankaccount.FieldVerifiedAt:
 		m.ClearVerifiedAt()
 		return nil
@@ -9967,6 +10037,9 @@ func (m *MerchantBankAccountMutation) ResetField(name string) error {
 		return nil
 	case merchantbankaccount.FieldAccountName:
 		m.ResetAccountName()
+		return nil
+	case merchantbankaccount.FieldFintavaBankCode:
+		m.ResetFintavaBankCode()
 		return nil
 	case merchantbankaccount.FieldVerifiedAt:
 		m.ResetVerifiedAt()

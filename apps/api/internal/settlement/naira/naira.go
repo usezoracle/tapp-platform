@@ -173,9 +173,14 @@ type Settlement struct {
 	SourceAccountNumber string
 	Amount              money.Amount
 
-	BankCode      string
-	AccountNumber string
-	AccountName   string
+	// BankCode is the catalogue's institution code the merchant's account
+	// was saved with. FintavaBankCode is the rail's own code for the same
+	// bank, resolved on each attempt and recorded so an operator can see
+	// what was sent; empty until an attempt resolved one.
+	BankCode        string
+	FintavaBankCode string
+	AccountNumber   string
+	AccountName     string
 
 	Reference string
 	State     string
@@ -192,7 +197,7 @@ type Settlement struct {
 const settlementSelect = `
 	SELECT tap_id, cardholder_id, merchant_id, source_customer_id, source_account_number,
 	       currency::text, amount_minor,
-	       bank_code, account_number, account_name,
+	       bank_code, coalesce(fintava_bank_code, ''), account_number, account_name,
 	       reference, state, attempts, coalesce(rail_ref, ''), coalesce(error, ''),
 	       created_at, updated_at, submitted_at, settled_at
 	  FROM card_tap_ngn_settlements`
@@ -205,7 +210,7 @@ func scanSettlement(row pgx.Row) (*Settlement, error) {
 	)
 	if err := row.Scan(&s.TapID, &s.CardholderID, &s.MerchantID, &s.SourceCustomerID, &s.SourceAccountNumber,
 		&cur, &minor,
-		&s.BankCode, &s.AccountNumber, &s.AccountName,
+		&s.BankCode, &s.FintavaBankCode, &s.AccountNumber, &s.AccountName,
 		&s.Reference, &s.State, &s.Attempts, &s.RailRef, &s.Error,
 		&s.CreatedAt, &s.UpdatedAt, &s.SubmittedAt, &s.SettledAt); err != nil {
 		return nil, err

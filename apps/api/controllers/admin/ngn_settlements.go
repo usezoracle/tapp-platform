@@ -46,6 +46,10 @@ type ngnSettlementView struct {
 	Amount              string `json:"amount"`
 
 	Bank bankView `json:"bank"`
+	// FintavaBankCode is the sort code the rail was actually given for the
+	// bank, resolved from bank.institution on the last attempt. Empty
+	// until an attempt resolved one.
+	FintavaBankCode string `json:"fintava_bank_code,omitempty"`
 
 	Reference string `json:"reference"`
 	State     string `json:"state"`
@@ -64,8 +68,9 @@ func ngnSettlementOf(s *naira.Settlement) ngnSettlementView {
 		TapID: s.TapID.String(), CardholderID: s.CardholderID.String(), MerchantID: s.MerchantID.String(),
 		SourceCustomerID: s.SourceCustomerID, SourceAccountNumber: s.SourceAccountNumber,
 		Currency: string(s.Amount.Currency()), Amount: plain(s.Amount),
-		Bank:      bankView{Institution: s.BankCode, AccountNumber: s.AccountNumber, AccountName: s.AccountName},
-		Reference: s.Reference, State: s.State, Attempts: s.Attempts,
+		Bank:            bankView{Institution: s.BankCode, AccountNumber: s.AccountNumber, AccountName: s.AccountName},
+		FintavaBankCode: s.FintavaBankCode,
+		Reference:       s.Reference, State: s.State, Attempts: s.Attempts,
 		RailRef: s.RailRef, Error: s.Error,
 		CreatedAt: s.CreatedAt.UTC().Format(tsLayout),
 		UpdatedAt: s.UpdatedAt.UTC().Format(tsLayout),
@@ -124,6 +129,11 @@ func (c *NGNSettlementsController) RetrySettlement(ctx *gin.Context) {
 		return
 	case errors.Is(err, naira.ErrNotFailed):
 		u.APIResponse(ctx, http.StatusConflict, "error", err.Error(), nil)
+		return
+	case errors.As(err, new(*naira.UnmappedBankError)):
+		// The rail still has no code for the merchant's bank; queueing it
+		// would only fail it again. The row keeps the reason.
+		u.APIResponse(ctx, http.StatusUnprocessableEntity, "error", err.Error(), nil)
 		return
 	case err != nil:
 		logger.Errorf("admin ngn settlements: retry %s: %v", tapID, err)

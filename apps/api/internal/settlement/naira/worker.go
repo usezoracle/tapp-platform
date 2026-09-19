@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 
@@ -28,12 +29,28 @@ const StaleAfter = 2 * time.Minute
 
 // Worker pays queued naira legs out of cardholders' wallets and follows them
 // to an outcome.
+// Execer is what a settlement hook needs of the database: a pool or a
+// transaction, whichever the caller holds.
+type Execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type Worker struct {
 	Pool *pgxpool.Pool
 	// Rail is the bank provider the wallets live on. It must implement
 	// baas.WalletTransferer for anything to be paid. Nil means nothing can
 	// be paid; rows queue until one is configured.
 	Rail baas.Provider
+	// Resolver translates the catalogue code a merchant's account stores
+	// into the code the rail knows the bank by. Nil means one built on the
+	// rail's own bank list and no catalogue: codes the rail lists pass
+	// through, everything else fails the leg as unmapped.
+	Resolver *BankCodeResolver
+	// Settled is told when a leg has been paid, so whatever waits on the
+	// tap being fully settled — the stock the tap buys — can be released.
+	// Nil means nothing waits.
+	Settled func(ctx context.Context, q Execer, tapID uuid.UUID)
 	// MerchantName gives the narration the merchant sees on their statement.
 	// Nil, or an empty answer, falls back to a generic one.
 	MerchantName func(ctx context.Context, merchant uuid.UUID) string
@@ -57,6 +74,9 @@ func (w *Worker) now() time.Time {
 func (w *Worker) Tick(ctx context.Context) (paid, chased int, err error) {
 	if _, ok := w.Rail.(baas.WalletTransferer); w.Rail == nil || !ok {
 		return 0, 0, ErrNoRail
+	}
+	if w.Resolver == nil {
+		w.Resolver = &BankCodeResolver{Banks: w.Rail.ListBanks}
 	}
 	paid, err = w.payQueued(ctx)
 	if err != nil {
@@ -94,6 +114,26 @@ func (w *Worker) payQueued(ctx context.Context) (int, error) {
 	}
 	paid := 0
 	for _, s := range due {
+		// The rail's code for the merchant's bank, resolved afresh on every
+		// attempt so a retry after the rail lists a bank, or after the
+		// catalogue is corrected, picks the fix up. Resolved BEFORE the
+		// claim: a leg nobody can address is failed from queued, with
+		// nothing discharged, rather than sent to the rail as a code it
+		// cannot read. A list that cannot be fetched leaves the row queued
+		// for the next tick.
+		code, _, err := w.Resolver.FintavaCode(ctx, s.BankCode)
+		if err != nil {
+			var unmapped *UnmappedBankError
+			if errors.As(err, &unmapped) {
+				if err := w.failQueued(ctx, s, unmapped.Error()); err != nil {
+					slog.Error("naira: could not fail settlement", "tap", s.TapID, "err", err)
+				}
+				continue
+			}
+			slog.Warn("naira: could not resolve bank code; leaving queued", "tap", s.TapID, "bank_code", s.BankCode, "err", err)
+			continue
+		}
+		s.FintavaBankCode = code
 		claimed, err := w.claim(ctx, s)
 		if err != nil {
 			slog.Error("naira: could not claim settlement", "tap", s.TapID, "err", err)
@@ -131,9 +171,10 @@ func (w *Worker) claim(ctx context.Context, s *Settlement) (bool, error) {
 		err := tx.QueryRow(ctx, `
 			UPDATE card_tap_ngn_settlements
 			   SET state = 'submitted', attempts = attempts + 1, error = NULL,
+			       fintava_bank_code = $2,
 			       submitted_at = now(), updated_at = now()
 			 WHERE tap_id = $1 AND state = 'queued'
-			RETURNING attempts`, s.TapID).Scan(&attempts)
+			RETURNING attempts`, s.TapID, s.FintavaBankCode).Scan(&attempts)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -150,14 +191,27 @@ func (w *Worker) claim(ctx context.Context, s *Settlement) (bool, error) {
 		return nil
 	})
 	if errors.Is(err, movements.ErrInsufficientFunds) {
-		_, e := w.Pool.Exec(ctx, `
-			UPDATE card_tap_ngn_settlements
-			   SET state = 'failed', error = $2, updated_at = now()
-			 WHERE tap_id = $1 AND state = 'queued'`,
-			s.TapID, "the merchant is no longer owed this amount: "+err.Error())
-		return false, e
+		return false, w.failQueued(ctx, s, "the merchant is no longer owed this amount: "+err.Error())
 	}
 	return claimed, err
+}
+
+// failQueued fails a row that was never claimed: nothing was discharged, so
+// there is nothing to return to the merchant, and nothing reached the rail.
+func (w *Worker) failQueued(ctx context.Context, s *Settlement, reason string) error {
+	tag, err := w.Pool.Exec(ctx, `
+		UPDATE card_tap_ngn_settlements
+		   SET state = 'failed', error = $2, updated_at = now()
+		 WHERE tap_id = $1 AND state = 'queued'`, s.TapID, reason)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		s.State, s.Error = Failed, reason
+		slog.Error("naira: settlement failed before it was sent; the merchant is still owed",
+			"tap", s.TapID, "owed", s.Amount.String(), "why", reason)
+	}
+	return nil
 }
 
 // submit asks the rail to pay one claimed settlement.
@@ -165,7 +219,12 @@ func (w *Worker) submit(ctx context.Context, s *Settlement) error {
 	// The bank confirms the name on the account before anything moves. The
 	// account was verified when the merchant saved it; this is what catches
 	// it having changed hands since.
-	enquiry, err := w.Rail.NameEnquiry(ctx, s.BankCode, s.AccountNumber)
+	if s.FintavaBankCode == "" {
+		// Cannot happen from payQueued, which resolves first; guards any
+		// other caller from sending the catalogue's code to the rail.
+		return w.fail(ctx, s, (&UnmappedBankError{StoredCode: s.BankCode}).Error())
+	}
+	enquiry, err := w.Rail.NameEnquiry(ctx, s.FintavaBankCode, s.AccountNumber)
 	if err != nil {
 		return w.recordError(ctx, s, err)
 	}
@@ -176,7 +235,7 @@ func (w *Worker) submit(ctx context.Context, s *Settlement) error {
 
 	transfer, err := w.Rail.(baas.WalletTransferer).TransferFromWallet(ctx, baas.WalletTransferRequest{
 		SourceID:            s.SourceCustomerID,
-		BeneficiaryBankCode: s.BankCode,
+		BeneficiaryBankCode: s.FintavaBankCode,
 		BeneficiaryAccount:  s.AccountNumber,
 		BeneficiaryName:     s.AccountName,
 		Amount:              decimalOf(s.Amount),
@@ -262,6 +321,9 @@ func (w *Worker) settle(ctx context.Context, s *Settlement, railRef string) erro
 		return nil
 	}
 	s.State = Settled
+	if w.Settled != nil {
+		w.Settled(ctx, w.Pool, s.TapID)
+	}
 	return nil
 }
 
@@ -382,6 +444,11 @@ func (w *Worker) ApplyWebhook(ctx context.Context, ev *baas.WebhookEvent) (bool,
 // Retry puts a failed settlement back in the queue. The next tick asks the
 // rail again, under the same reference, and discharges the claim again as a
 // new attempt.
+//
+// The bank code is resolved here too, so an operator retrying a leg the
+// rail still has no code for is told so now, with the institution's name,
+// instead of finding the row failed again on the next tick. The tick
+// resolves again regardless; this is only the early answer.
 func (w *Worker) Retry(ctx context.Context, tapID uuid.UUID) (*Settlement, error) {
 	s, err := Get(ctx, w.Pool, tapID)
 	if err != nil {
@@ -389,6 +456,18 @@ func (w *Worker) Retry(ctx context.Context, tapID uuid.UUID) (*Settlement, error
 	}
 	if s.State != Failed {
 		return nil, fmt.Errorf("%w: tap %s is %s", ErrNotFailed, tapID, s.State)
+	}
+	if w.Resolver == nil && w.Rail != nil {
+		w.Resolver = &BankCodeResolver{Banks: w.Rail.ListBanks}
+	}
+	if w.Resolver != nil {
+		var unmapped *UnmappedBankError
+		if _, _, err := w.Resolver.FintavaCode(ctx, s.BankCode); errors.As(err, &unmapped) {
+			_, _ = w.Pool.Exec(ctx, `
+				UPDATE card_tap_ngn_settlements SET error = $2, updated_at = now()
+				 WHERE tap_id = $1 AND state = 'failed'`, tapID, unmapped.Error())
+			return nil, unmapped
+		}
 	}
 	if _, err := w.Pool.Exec(ctx, `
 		UPDATE card_tap_ngn_settlements

@@ -757,7 +757,10 @@ type activityView struct {
 	Symbol    *string      `json:"symbol"`
 	TapAmount money.Amount `json:"tap_amount"`
 	Funding   money.Amount `json:"funding"`
-	// State: allocated | pending | escrowed.
+	// State: held | queued | allocated | pending | escrowed. A held tap is
+	// awaiting settlement: the market is told of it only once the merchant
+	// has been paid. Held and queued items have no funding, bought or
+	// price yet (null / zero).
 	State  string       `json:"state"`
 	Bought units        `json:"bought"`
 	Price  money.Amount `json:"price"`
@@ -766,6 +769,11 @@ type activityView struct {
 
 // Activity is what the cardholder's taps have bought, newest first: one item
 // per tap, with the merchant named.
+//
+// Freedom answers for the taps it has been told of. The taps it has not --
+// held until the merchant is paid, or queued and on their way -- are read
+// from the outbox here and listed alongside, so a cardholder sees every
+// tap that will buy shares, not only the ones that already have.
 //
 // Freedom names the merchant as it knows it. A merchant that took taps
 // before it listed is a placeholder there, named by its bare ref, so any
@@ -793,12 +801,26 @@ func (h *HoldingsHandler) Activity(ctx *gin.Context) {
 		writeRailError(ctx, "activity", err)
 		return
 	}
-	// The merchants Freedom could not name, looked up here in one go.
+	var unsent []equity.Unsent
+	if h.db() != nil {
+		unsent, err = equity.UnsentFor(ctx.Request.Context(), h.db(), user, limit)
+		if err != nil {
+			// The market's answer stands on its own; what is still on
+			// its way is a poorer page, not a failed one.
+			logger.Errorf("equity activity: unsent taps: %v", err)
+		}
+	}
+
+	// The merchants Freedom could not name, and the ones it has not been
+	// told of, looked up here in one go.
 	var unnamed []uuid.UUID
 	for _, r := range rows {
 		if id, ok := unnamedMerchant(r); ok {
 			unnamed = append(unnamed, id)
 		}
+	}
+	for _, u := range unsent {
+		unnamed = append(unnamed, u.Merchant)
 	}
 	local := map[uuid.UUID]merchantView{}
 	if len(unnamed) > 0 && h.db() != nil {
@@ -810,7 +832,19 @@ func (h *HoldingsHandler) Activity(ctx *gin.Context) {
 		}
 	}
 
-	out := make([]activityView, 0, len(rows))
+	// What is still on its way comes first: it is the newest activity, and
+	// Freedom's rows keep the order Freedom gave them.
+	out := make([]activityView, 0, len(rows)+len(unsent))
+	for _, u := range unsent {
+		m := merchantView{Ref: u.Merchant.String()}
+		if lm, found := local[u.Merchant]; found {
+			m = lm
+		}
+		out = append(out, activityView{
+			TapID: u.TapID.String(), Merchant: m, Symbol: m.Symbol, TapAmount: u.Amount,
+			State: u.State, Bought: unitsOf(0), At: u.At.UTC().Format(time.RFC3339),
+		})
+	}
 	for _, r := range rows {
 		symbol := r.Symbol
 		if symbol != nil && *symbol == "" {
@@ -827,6 +861,9 @@ func (h *HoldingsHandler) Activity(ctx *gin.Context) {
 			Funding: kobo(r.FundingKobo), State: r.State,
 			Bought: unitsOf(r.Units), Price: koboOrNull(r.PriceKobo), At: r.At,
 		})
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
 	}
 	u.APIResponse(ctx, http.StatusOK, "success", "Activity retrieved", gin.H{"activity": out})
 }

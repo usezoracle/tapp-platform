@@ -86,6 +86,11 @@ func AccountName(v string) predicate.MerchantBankAccount {
 	return predicate.MerchantBankAccount(sql.FieldEQ(FieldAccountName, v))
 }
 
+// FintavaBankCode applies equality check predicate on the "fintava_bank_code" field. It's identical to FintavaBankCodeEQ.
+func FintavaBankCode(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldEQ(FieldFintavaBankCode, v))
+}
+
 // VerifiedAt applies equality check predicate on the "verified_at" field. It's identical to VerifiedAtEQ.
 func VerifiedAt(v time.Time) predicate.MerchantBankAccount {
 	return predicate.MerchantBankAccount(sql.FieldEQ(FieldVerifiedAt, v))
@@ -429,6 +434,81 @@ func AccountNameEqualFold(v string) predicate.MerchantBankAccount {
 // AccountNameContainsFold applies the ContainsFold predicate on the "account_name" field.
 func AccountNameContainsFold(v string) predicate.MerchantBankAccount {
 	return predicate.MerchantBankAccount(sql.FieldContainsFold(FieldAccountName, v))
+}
+
+// FintavaBankCodeEQ applies the EQ predicate on the "fintava_bank_code" field.
+func FintavaBankCodeEQ(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldEQ(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeNEQ applies the NEQ predicate on the "fintava_bank_code" field.
+func FintavaBankCodeNEQ(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldNEQ(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeIn applies the In predicate on the "fintava_bank_code" field.
+func FintavaBankCodeIn(vs ...string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldIn(FieldFintavaBankCode, vs...))
+}
+
+// FintavaBankCodeNotIn applies the NotIn predicate on the "fintava_bank_code" field.
+func FintavaBankCodeNotIn(vs ...string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldNotIn(FieldFintavaBankCode, vs...))
+}
+
+// FintavaBankCodeGT applies the GT predicate on the "fintava_bank_code" field.
+func FintavaBankCodeGT(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldGT(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeGTE applies the GTE predicate on the "fintava_bank_code" field.
+func FintavaBankCodeGTE(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldGTE(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeLT applies the LT predicate on the "fintava_bank_code" field.
+func FintavaBankCodeLT(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldLT(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeLTE applies the LTE predicate on the "fintava_bank_code" field.
+func FintavaBankCodeLTE(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldLTE(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeContains applies the Contains predicate on the "fintava_bank_code" field.
+func FintavaBankCodeContains(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldContains(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeHasPrefix applies the HasPrefix predicate on the "fintava_bank_code" field.
+func FintavaBankCodeHasPrefix(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldHasPrefix(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeHasSuffix applies the HasSuffix predicate on the "fintava_bank_code" field.
+func FintavaBankCodeHasSuffix(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldHasSuffix(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeIsNil applies the IsNil predicate on the "fintava_bank_code" field.
+func FintavaBankCodeIsNil() predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldIsNull(FieldFintavaBankCode))
+}
+
+// FintavaBankCodeNotNil applies the NotNil predicate on the "fintava_bank_code" field.
+func FintavaBankCodeNotNil() predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldNotNull(FieldFintavaBankCode))
+}
+
+// FintavaBankCodeEqualFold applies the EqualFold predicate on the "fintava_bank_code" field.
+func FintavaBankCodeEqualFold(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldEqualFold(FieldFintavaBankCode, v))
+}
+
+// FintavaBankCodeContainsFold applies the ContainsFold predicate on the "fintava_bank_code" field.
+func FintavaBankCodeContainsFold(v string) predicate.MerchantBankAccount {
+	return predicate.MerchantBankAccount(sql.FieldContainsFold(FieldFintavaBankCode, v))
 }
 
 // VerifiedAtEQ applies the EQ predicate on the "verified_at" field.

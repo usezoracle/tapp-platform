@@ -9,12 +9,16 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/usezoracle/tapp/api/internal/equity"
+	"github.com/usezoracle/tapp/api/internal/ledger/movements"
+	"github.com/usezoracle/tapp/api/internal/money"
 	"github.com/usezoracle/tapp/api/internal/platform/migrate"
 )
 
@@ -584,5 +588,104 @@ func TestHoldingsAreReshapedForTheCardholder(t *testing.T) {
 	h.Client = equity.New("http://127.0.0.1:1", "tok")
 	if code, env := call(t, router, "GET", "/holdings", ""); code != 503 || !strings.Contains(env.Message, "unreachable") {
 		t.Errorf("market down: %d %q", code, env.Message)
+	}
+}
+
+// A tap the market has not been told of yet -- held until the merchant is
+// paid -- is still the cardholder's activity: it is listed from the outbox,
+// named from this side, alongside what Freedom answers for.
+func TestActivityListsTapsAwaitingSettlement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	pool := equityTestPool(t)
+	ctx := context.Background()
+	profile, _ := newMerchant(t, pool)
+	cardholder := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, first_name, last_name, email) VALUES ($1, 'Ada', 'Okafor', $2)`,
+		cardholder, cardholder.String()+"@test.local"); err != nil {
+		t.Fatal(err)
+	}
+	amount := money.Naira(2_000)
+	if _, err := movements.Deposit(ctx, pool, cardholder, amount, "bank", uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	tapID := uuid.New()
+	err := movements.InTx(ctx, pool, func(tx pgx.Tx) error {
+		ledgerTx, err := movements.Tap(ctx, tx, cardholder, profile, amount, money.Naira(10), tapID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO card_taps (id, card_id, cardholder_id, merchant_id, currency,
+			                       amount_minor, fee_minor, tier, funded_usdc_minor, ledger_tx_id, nonce, created_at)
+			VALUES ($1, $2, $3, $4, 'NGN', $5, 1000, 'none', $5, $6, $7, '2026-09-19T09:00:00Z')`,
+			tapID, uuid.New(), cardholder, profile, amount.Minor(), ledgerTx, uuid.NewString()); err != nil {
+			return err
+		}
+		return equity.EnqueueTap(ctx, tx, equity.TapEvent{TapID: tapID, Cardholder: cardholder, Merchant: profile,
+			Amount: amount, At: time.Now()})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := newFakeRail()
+	r.on("GET", "/v1/rail/cardholders/"+cardholder.String()+"/activity", 200, `[{"tap_ref":"tap-1","symbol":"MAMAPUT",
+		"merchant_ref":"`+profile.String()+`","funding_kobo":500,"state":"allocated","units":12500000,"price_kobo":4000,"at":"2026-09-18T11:24:03Z"}]`)
+	h := &HoldingsHandler{Client: r.serve(t), DB: pool, User: func(*gin.Context) (uuid.UUID, bool) { return cardholder, true }}
+	router := gin.New()
+	router.GET("/equity-activity", h.Activity)
+
+	code, env := call(t, router, "GET", "/equity-activity", "")
+	if code != 200 {
+		t.Fatalf("activity = %d %s", code, env.Message)
+	}
+	var act struct {
+		Activity []struct {
+			TapID    string `json:"tap_id"`
+			Merchant struct {
+				Ref  string `json:"ref"`
+				Name string `json:"name"`
+			} `json:"merchant"`
+			TapAmount struct {
+				Display string `json:"display"`
+			} `json:"tap_amount"`
+			Funding json.RawMessage `json:"funding"`
+			State   string          `json:"state"`
+			Bought  struct {
+				Units int64 `json:"units"`
+			} `json:"bought"`
+			Price json.RawMessage `json:"price"`
+			At    string          `json:"at"`
+		} `json:"activity"`
+	}
+	if err := json.Unmarshal(env.Data, &act); err != nil {
+		t.Fatal(err)
+	}
+	if len(act.Activity) != 2 {
+		t.Fatalf("activity = %s, want the held tap and the allocated one", env.Data)
+	}
+	held, allocated := act.Activity[0], act.Activity[1]
+	if held.TapID != tapID.String() || held.State != "held" || held.TapAmount.Display != "₦2,000.00" ||
+		string(held.Funding) != "null" || string(held.Price) != "null" || held.Bought.Units != 0 ||
+		held.At != "2026-09-19T09:00:00Z" || held.Merchant.Ref != profile.String() || held.Merchant.Name != "Mama Put" {
+		t.Errorf("held item = %+v", held)
+	}
+	if allocated.TapID != "tap-1" || allocated.State != "allocated" {
+		t.Errorf("allocated item = %+v", allocated)
+	}
+
+	// Once released it is queued; once delivered it is Freedom's to answer
+	// for and no longer listed from here.
+	for state, want := range map[string]int{"queued": 2, "delivered": 1, "cancelled": 1} {
+		if _, err := pool.Exec(ctx, `UPDATE equity_outbox SET state = $2 WHERE tap_id = $1`, tapID, state); err != nil {
+			t.Fatal(err)
+		}
+		_, env := call(t, router, "GET", "/equity-activity", "")
+		if err := json.Unmarshal(env.Data, &act); err != nil {
+			t.Fatal(err)
+		}
+		if len(act.Activity) != want || (state == "queued" && act.Activity[0].State != "queued") {
+			t.Errorf("%s: activity = %s", state, env.Data)
+		}
 	}
 }

@@ -19,21 +19,58 @@ endpoint answers `404` with the message
 
 ## How a tap reaches the market
 
+Shares are issued when the merchant is **paid**, not when the cardholder is
+charged: the fee that funds the buyback is earned by the merchant's payment
+landing, and a tap whose settlement fails has earned nothing.
+
 1. `tap.Service.Debit` charges the card and, in the **same transaction**,
    inserts one `equity_outbox` row (`kind='tap'`, payload = the exact
-   `POST /v1/rail/taps` body). Only NGN taps; any other currency is skipped
-   with a log line. A reversal inserts a `kind='reverse'` row the same way.
-2. `equity.Worker` ticks every 5s, takes up to 50 due rows oldest-first and
-   delivers them. A reversal is held until its tap row is `delivered`.
-3. On success: `state='delivered'`, `response` = Freedom's JSON, `delivered_at`.
+   `POST /v1/rail/taps` body) in state **`held`**. Only NGN taps; any other
+   currency is skipped with a log line. Nothing is ever lost -- the row
+   exists from the moment the charge does -- but the worker never delivers a
+   held row.
+2. The row moves `held → queued` when the tap is **fully settled**: every
+   leg it has is at rest in its paid state -- the USDC leg `fulfilled` in
+   `card_tap_settlements`, the naira leg `settled` in
+   `card_tap_ngn_settlements`, a mixed tap both. A tap with no leg at all
+   stays held. The one function that decides this is
+   `equity.ReleaseIfSettled(ctx, q, tapID)` (SQL mirrors the `settled`
+   derivation in `internal/transactions`). It is called:
+   - by the offramp settler, in the transaction that marks the USDC leg
+     `fulfilled` (`internal/chain/offramp/settler.go`);
+   - by the naira worker after it marks a leg `settled`, through
+     `apiv1.OnLegSettled(ctx, q, tapID)` (`internal/api/v1/equity_wiring.go`);
+   - as a safety net, by the worker itself: every tick starts with
+     `equity.ReleaseSettled`, a sweep that queues any held row whose tap is
+     now settled, so a missed hook cannot strand shares. The worst case for
+     a missed hook is one tick of delay.
+3. A reversal (`tap.Service.Reverse`, same transaction as the reversal)
+   looks at the tap's row. If it is still `held` or `queued` -- the market
+   has never heard of the tap -- the row is **`cancelled`** (`last_error`
+   carries the reason) and nothing is sent, ever. If it is `delivered`, a
+   `kind='reverse'` row is queued as before. The worker locks a row while it
+   is being delivered, so a reversal arriving mid-delivery waits and then
+   takes the `delivered` branch; a tap cannot be sent a moment after a
+   reversal decided it never would be.
+4. `equity.Worker` ticks every 5s: sweeps (step 2), then takes up to 50
+   `queued` rows that are due, oldest-first, and delivers them. A reversal is
+   held back until its tap row is `delivered`.
+5. On success: `state='delivered'`, `response` = Freedom's JSON, `delivered_at`.
    On failure: `attempts+1`, `last_error`, `next_at = now + 5s·2^(attempts-1)`
    capped at 10 min. A 4xx other than 409/429 is a refusal and fails the row
    (`state='failed'`) on the 5th attempt; anything else (network, 5xx, 409,
    429) retries indefinitely.
 
+States on the row: `held | queued | delivered | failed | cancelled`
+(migration 0026; the old `pending` is now `queued`, and every undelivered
+tap row was moved to `held` -- the sweep releases the settled ones on the
+first tick).
+
 Debugging: `SELECT id, kind, tap_id, state, attempts, last_error, next_at FROM
 equity_outbox WHERE state <> 'delivered' ORDER BY id`. Every fact is on the
-row; there is no other state.
+row; there is no other state. A row stuck in `held` means the tap is not
+settled -- look at its legs in `card_tap_settlements` /
+`card_tap_ngn_settlements`, not at the outbox.
 
 ## Wire shapes
 
@@ -113,10 +150,16 @@ additive field on every row, `equity`, `null` for a tap never sent to the
 market and for offramps:
 
 ```json
-"equity": { "state": "queued | failed | escrowed | pending | allocated | reversed",
+"equity": { "state": "held | queued | failed | cancelled | escrowed | pending | allocated | reversed",
             "symbol": "MAMAPUT | null", "units": 12500000, "shares": "0.125",
             "price": Amount | null }
 ```
+
+`held` is "awaiting settlement": the market is told of the tap only once the
+merchant has been paid. `queued` is settled and on its way. `cancelled` is a
+tap reversed before the market heard of it -- nothing was or will be sent
+(distinct from `reversed`, where the market has unwound shares it issued).
+The wire value is the bare state; the client maps `held` to its own copy.
 
 ### Cardholder (JWT)
 
@@ -136,11 +179,19 @@ and `"prices"` (Freedom's market-data array, passed through).
 ```json
 { "activity": [ { "tap_id": "…",
      "merchant": { "ref": "<sender profile id>", "name": "Mama Put", "symbol": "MAMAPUT | null" },
-     "symbol": "… | null", "tap_amount": Amount, "funding": Amount,
-     "state": "allocated | pending | escrowed", "bought": {units,shares},
+     "symbol": "… | null", "tap_amount": Amount, "funding": Amount | null,
+     "state": "held | queued | allocated | pending | escrowed", "bought": {units,shares},
      "price": Amount | null, "at": "…" } ] }
 ```
 `tap_amount` is the ticket; `funding` is the slice of it that bought shares.
+Taps the market has not been told of yet -- `held` (awaiting the merchant's
+settlement) and `queued` (settled, delivery pending) -- are read from the
+outbox on this side and listed **first**, ahead of Freedom's rows in the
+order Freedom gave them. They carry `tap_amount`, the merchant and `at` (the
+charge time), but no `funding`, `price` (both `null`) or `bought` (zero):
+those are the market's to decide. Once delivered the tap is Freedom's to
+answer for and is no longer listed from here; a `cancelled` tap is not listed
+at all.
 `merchant.name` is Freedom's trading name for the merchant. A merchant that
 took taps before it listed is a placeholder on Freedom, named by its bare
 ref, so any item whose name is empty or equals the ref is named from this

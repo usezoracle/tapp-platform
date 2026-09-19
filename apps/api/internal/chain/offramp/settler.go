@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/usezoracle/tapp/api/internal/equity"
 	"github.com/usezoracle/tapp/api/internal/ledger/movements"
 	"github.com/usezoracle/tapp/api/internal/money"
 )
@@ -403,10 +404,7 @@ func (s *Settler) Track(ctx context.Context) (resolved int, err error) {
 		}
 		switch {
 		case info.Fulfilled:
-			if _, err := s.Pool.Exec(ctx, `
-				UPDATE card_tap_settlements
-				   SET state = 'fulfilled', updated_at = now()
-				 WHERE tap_id = $1 AND state = 'submitted'`, o.tap); err != nil {
+			if err := s.fulfilled(ctx, o.tap); err != nil {
 				return resolved, err
 			}
 			resolved++
@@ -418,6 +416,28 @@ func (s *Settler) Track(ctx context.Context) (resolved int, err error) {
 		}
 	}
 	return resolved, nil
+}
+
+// fulfilled records that the provider paid the merchant. This leg is done,
+// and the tap's shares -- held back until the merchant was paid -- are
+// released to the market if no other leg is still outstanding. One
+// transaction, so a leg cannot be fulfilled without its release being
+// considered.
+func (s *Settler) fulfilled(ctx context.Context, tap uuid.UUID) error {
+	return movements.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE card_tap_settlements
+			   SET state = 'fulfilled', updated_at = now()
+			 WHERE tap_id = $1 AND state = 'submitted'`, tap)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return nil
+		}
+		_, err = equity.ReleaseIfSettled(ctx, tx, tap)
+		return err
+	})
 }
 
 // refunded records that a round paid nobody: the merchant's claim comes back,

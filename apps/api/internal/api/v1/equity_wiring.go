@@ -53,12 +53,29 @@ func RecordTapEquity(c *equity.Client) func(context.Context, pgx.Tx, tap.Charged
 	}
 }
 
-// RecordReversalEquity is the same for a reversal.
+// RecordReversalEquity is the same for a reversal: it cancels a tap the
+// market has not heard of, or queues a reversal of one it has.
 func RecordReversalEquity(c *equity.Client) func(context.Context, pgx.Tx, uuid.UUID, string) error {
 	if !c.Enabled() {
 		return nil
 	}
 	return func(ctx context.Context, tx pgx.Tx, tapID uuid.UUID, reason string) error {
-		return equity.EnqueueReverse(ctx, tx, tapID, reason)
+		return equity.RecordReversal(ctx, tx, tapID, reason)
+	}
+}
+
+// OnLegSettled is what every settlement leg calls once it has reached its
+// paid state: the tap's held outbox row is queued for the market if the tap
+// is now fully settled, and left alone otherwise.
+//
+// The USDC leg calls it from the offramp settler. The naira leg's worker
+// (internal/settlement/naira) must call it after it marks a leg settled,
+// through a hook wired in naira_wiring.go. It is safe without a market --
+// there are no rows to release -- and safe to call twice. A failure is
+// logged and not returned: the leg IS settled, and the worker's sweep
+// releases the row on its next tick anyway.
+func OnLegSettled(ctx context.Context, q equity.Execer, tapID uuid.UUID) {
+	if _, err := equity.ReleaseIfSettled(ctx, q, tapID); err != nil {
+		logger.Errorf("equity: release tap %s after settlement: %v", tapID, err)
 	}
 }

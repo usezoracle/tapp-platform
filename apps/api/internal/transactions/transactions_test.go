@@ -310,11 +310,11 @@ func TestATapShowsWhatTheMarketDidWithIt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// settled: allocated shares. refundedOnce: queued, not yet delivered.
+	// settled: allocated shares. refundedOnce: held, awaiting settlement.
 	// failed: delivery given up. reversed: allocated, then unwound.
 	exec(`INSERT INTO equity_outbox (kind, tap_id, payload, state, response) VALUES
 		('tap', $1, '{}', 'delivered', '{"tap_ref":"x","intent_state":"allocated","allocated_units":12500000,"price_kobo":4000,"symbol":"MAMAPUT"}'),
-		('tap', $2, '{}', 'pending', NULL),
+		('tap', $2, '{}', 'held', NULL),
 		('tap', $3, '{}', 'failed', NULL),
 		('tap', $4, '{}', 'delivered', '{"intent_state":"allocated","allocated_units":1000,"price_kobo":4000,"symbol":"MAMAPUT"}'),
 		('reverse', $4, '{}', 'delivered', '{"state":"reversed","unwound_units":1000}')`,
@@ -331,8 +331,15 @@ func TestATapShowsWhatTheMarketDidWithIt(t *testing.T) {
 		e.Shares != "0.125" || e.Price.Minor() != 4000 || e.Price.Currency() != money.NGN {
 		t.Errorf("allocated tap equity = %+v", e)
 	}
-	if e := got[w.refundedOnce].Equity; e == nil || e.State != EquityQueued || e.Symbol != "" {
-		t.Errorf("queued tap equity = %+v", e)
+	if e := got[w.refundedOnce].Equity; e == nil || e.State != EquityHeld || e.Symbol != "" {
+		t.Errorf("held tap equity = %+v", e)
+	}
+	// Released for delivery, then reversed before it was delivered.
+	for state, want := range map[string]string{"queued": EquityQueued, "cancelled": EquityCancelled} {
+		exec(`UPDATE equity_outbox SET state = $2 WHERE tap_id = $1 AND kind = 'tap'`, w.refundedOnce, state)
+		if one, err := Get(ctx, pool, w.refundedOnce); err != nil || one.Equity == nil || one.Equity.State != want {
+			t.Errorf("%s tap equity = %+v (%v)", state, one.Equity, err)
+		}
 	}
 	if e := got[w.failed].Equity; e == nil || e.State != EquityFailed {
 		t.Errorf("failed tap equity = %+v", e)

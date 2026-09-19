@@ -75,6 +75,10 @@ type freedom struct {
 		method, path string
 		body         map[string]any
 	}
+	// hold, when set, makes a tap delivery wait to be released: entered is
+	// closed when the stub is inside the call, and the answer is not sent
+	// until hold is closed. For observing a delivery in flight.
+	hold, entered chan struct{}
 }
 
 func (f *freedom) handler() http.Handler {
@@ -82,6 +86,10 @@ func (f *freedom) handler() http.Handler {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
+		}
+		if f.hold != nil && r.URL.Path == "/v1/rail/taps" {
+			close(f.entered)
+			<-f.hold
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -146,6 +154,89 @@ func enqueue(t *testing.T, pool *pgxpool.Pool, e TapEvent) {
 	}
 }
 
+// charge is a naira tap the way the tap package writes one: the ledger
+// movement, the card_taps row and the outbox row in one transaction. It is
+// what release has to look at, so the queue tests need the real thing.
+func charge(t *testing.T, pool *pgxpool.Pool, cardholder uuid.UUID, amount money.Amount) (tapID, merchant uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	tapID, merchant = uuid.New(), uuid.New()
+	fee := money.FeeFor(amount, 50)
+	if _, err := movements.Deposit(ctx, pool, cardholder, amount, "bank", uuid.NewString()); err != nil {
+		t.Fatalf("Deposit: %v", err)
+	}
+	err := movements.InTx(ctx, pool, func(tx pgx.Tx) error {
+		ledgerTx, err := movements.Tap(ctx, tx, cardholder, merchant, amount, fee, tapID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO card_taps (id, card_id, cardholder_id, merchant_id, currency,
+			                       amount_minor, fee_minor, tier, funded_usdc_minor, ledger_tx_id, nonce)
+			VALUES ($1, $2, $3, $4, 'NGN', $5, $6, 'none', $5, $7, $8)`,
+			tapID, uuid.New(), cardholder, merchant, amount.Minor(), fee.Minor(), ledgerTx, uuid.NewString()); err != nil {
+			return err
+		}
+		return EnqueueTap(ctx, tx, TapEvent{TapID: tapID, Cardholder: cardholder, Merchant: merchant,
+			Amount: amount, At: time.Now()})
+	})
+	if err != nil {
+		t.Fatalf("charge: %v", err)
+	}
+	return tapID, merchant
+}
+
+// usdcLeg puts the tap's on-chain leg in a state, as the offramp settler
+// would, WITHOUT calling ReleaseIfSettled: what the tests then observe is
+// the release, not the settler.
+func usdcLeg(t *testing.T, pool *pgxpool.Pool, tapID uuid.UUID, state string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO card_tap_settlements (tap_id, from_address, sell_micro, state)
+		VALUES ($1, '0xfrom', 1, $2)
+		ON CONFLICT (tap_id) DO UPDATE SET state = EXCLUDED.state, updated_at = now()`, tapID, state); err != nil {
+		t.Fatalf("usdc leg: %v", err)
+	}
+}
+
+// ngnLeg is the same for the naira leg.
+func ngnLeg(t *testing.T, pool *pgxpool.Pool, tapID uuid.UUID, state string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO card_tap_ngn_settlements (tap_id, cardholder_id, merchant_id, source_customer_id,
+		        source_account_number, currency, amount_minor, bank_code, account_number, account_name,
+		        reference, state, settled_at)
+		SELECT id, cardholder_id, merchant_id, 'c', 'a', 'NGN', 1, 'B', '1', 'N', $1::text, $2,
+		       CASE WHEN $2 = 'settled' THEN now() END
+		  FROM card_taps WHERE id = $3
+		ON CONFLICT (tap_id) DO UPDATE SET state = EXCLUDED.state, settled_at = EXCLUDED.settled_at, updated_at = now()`,
+		tapID.String(), state, tapID); err != nil {
+		t.Fatalf("ngn leg: %v", err)
+	}
+}
+
+// reverse records a reversal as the tap package does, in its own transaction.
+func reverse(t *testing.T, pool *pgxpool.Pool, tapID uuid.UUID, reason string) {
+	t.Helper()
+	err := movements.InTx(context.Background(), pool, func(tx pgx.Tx) error {
+		return RecordReversal(context.Background(), tx, tapID, reason)
+	})
+	if err != nil {
+		t.Fatalf("RecordReversal: %v", err)
+	}
+}
+
+// rowCount is how many outbox rows a tap has of a kind.
+func rowCount(t *testing.T, pool *pgxpool.Pool, tapID uuid.UUID, kind string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM equity_outbox WHERE tap_id = $1 AND kind = $2`, tapID, kind).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 type outboxRow struct {
 	State       string
 	Attempts    int
@@ -204,8 +295,8 @@ func TestATapIsQueuedWithTheRailRequestAsItsPayload(t *testing.T) {
 	if payload != want {
 		t.Errorf("payload = %+v, want %+v", payload, want)
 	}
-	if r := read(t, pool, tapID, KindTap); r.State != StatePending || r.Attempts != 0 {
-		t.Errorf("row = %+v, want pending with no attempts", r)
+	if r := read(t, pool, tapID, KindTap); r.State != StateHeld || r.Attempts != 0 {
+		t.Errorf("row = %+v, want held with no attempts", r)
 	}
 
 	// A second row for the same tap cannot exist.
@@ -234,9 +325,8 @@ func TestANonNairaTapIsNotQueued(t *testing.T) {
 func TestTheWorkerDeliversAndKeepsTheAnswer(t *testing.T) {
 	pool := testPool(t)
 	f, client := stub(t)
-	tapID := uuid.New()
-	enqueue(t, pool, TapEvent{TapID: tapID, Cardholder: newUser(t, pool, "Ada", ""), Merchant: uuid.New(),
-		Amount: money.Naira(10_000), At: time.Now()})
+	tapID, _ := charge(t, pool, newUser(t, pool, "Ada", ""), money.Naira(10_000))
+	usdcLeg(t, pool, tapID, "fulfilled")
 
 	w := &Worker{Pool: pool, Client: client}
 	delivered, failed, err := w.Tick(context.Background())
@@ -278,9 +368,8 @@ func TestTheWorkerSendsTheRailRequest(t *testing.T) {
 	// sends every due row in the table.
 	pool := testPool(t)
 	f, client := stub(t)
-	tapID := uuid.New()
-	enqueue(t, pool, TapEvent{TapID: tapID, Cardholder: newUser(t, pool, "Ada", ""), Merchant: uuid.New(),
-		Amount: money.Naira(10_000), At: time.Now()})
+	tapID, _ := charge(t, pool, newUser(t, pool, "Ada", ""), money.Naira(10_000))
+	usdcLeg(t, pool, tapID, "fulfilled")
 	f.status, f.body = http.StatusInternalServerError, `{}` // hold everything else back
 	if _, _, err := (&Worker{Pool: pool, Client: client}).Tick(context.Background()); err != nil {
 		t.Fatal(err)
@@ -306,9 +395,8 @@ func TestAnOutageIsRetriedWithBackoffForever(t *testing.T) {
 	pool := testPool(t)
 	f, client := stub(t)
 	f.status, f.body = http.StatusInternalServerError, `{"error":"down"}`
-	tapID := uuid.New()
-	enqueue(t, pool, TapEvent{TapID: tapID, Cardholder: newUser(t, pool, "A", "B"), Merchant: uuid.New(),
-		Amount: money.Naira(10_000), At: time.Now()})
+	tapID, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(10_000))
+	usdcLeg(t, pool, tapID, "fulfilled")
 
 	// The row was queued at the database's clock; the worker's frozen clock
 	// must sit after it or the row is never due. Microsecond precision is
@@ -325,7 +413,7 @@ func TestAnOutageIsRetriedWithBackoffForever(t *testing.T) {
 			t.Fatalf("Tick %d: delivered %d failed %d against a 500", attempt, delivered, failed)
 		}
 		r := read(t, pool, tapID, KindTap)
-		if r.State != StatePending || r.Attempts != attempt {
+		if r.State != StateQueued || r.Attempts != attempt {
 			t.Fatalf("after %d failures row = %+v", attempt, r)
 		}
 		if r.LastError == nil || !strings.Contains(*r.LastError, "500") {
@@ -361,9 +449,8 @@ func TestARefusalIsFailedAfterFiveAttempts(t *testing.T) {
 	pool := testPool(t)
 	f, client := stub(t)
 	f.status, f.body = http.StatusUnprocessableEntity, `{"error":"unknown merchant"}`
-	tapID := uuid.New()
-	enqueue(t, pool, TapEvent{TapID: tapID, Cardholder: newUser(t, pool, "A", "B"), Merchant: uuid.New(),
-		Amount: money.Naira(10_000), At: time.Now()})
+	tapID, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(10_000))
+	usdcLeg(t, pool, tapID, "fulfilled")
 
 	now := time.Now()
 	w := &Worker{Pool: pool, Client: client, Now: func() time.Time { return now }}
@@ -374,8 +461,8 @@ func TestARefusalIsFailedAfterFiveAttempts(t *testing.T) {
 		}
 		r := read(t, pool, tapID, KindTap)
 		if attempt < MaxAttempts {
-			if r.State != StatePending {
-				t.Fatalf("attempt %d: failed=%d row=%+v; want still pending", attempt, failed, r)
+			if r.State != StateQueued {
+				t.Fatalf("attempt %d: failed=%d row=%+v; want still queued", attempt, failed, r)
 			}
 			now = r.NextAt
 			continue
@@ -400,9 +487,8 @@ func TestConflictAndRateLimitAreNotRefusals(t *testing.T) {
 	pool := testPool(t)
 	f, client := stub(t)
 	f.status, f.body = http.StatusTooManyRequests, `{"error":"slow down"}`
-	tapID := uuid.New()
-	enqueue(t, pool, TapEvent{TapID: tapID, Cardholder: newUser(t, pool, "A", "B"), Merchant: uuid.New(),
-		Amount: money.Naira(10_000), At: time.Now()})
+	tapID, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(10_000))
+	usdcLeg(t, pool, tapID, "fulfilled")
 
 	now := time.Now()
 	w := &Worker{Pool: pool, Client: client, Now: func() time.Time { return now }}
@@ -416,8 +502,8 @@ func TestConflictAndRateLimitAreNotRefusals(t *testing.T) {
 			t.Fatalf("attempt %d: %v", attempt, err)
 		}
 		r := read(t, pool, tapID, KindTap)
-		if r.State != StatePending || r.Attempts != attempt {
-			t.Fatalf("attempt %d: row = %+v, want still pending", attempt, r)
+		if r.State != StateQueued || r.Attempts != attempt {
+			t.Fatalf("attempt %d: row = %+v, want still queued", attempt, r)
 		}
 		now = r.NextAt
 	}
@@ -429,27 +515,27 @@ func TestAReversalWaitsForItsTap(t *testing.T) {
 	tapID := uuid.New()
 	cardholder := newUser(t, pool, "A", "B")
 
-	// The reversal is queued first, as if the tap's delivery were still
-	// backing off.
-	err := movements.InTx(context.Background(), pool, func(tx pgx.Tx) error {
-		return EnqueueReverse(context.Background(), tx, tapID, "merchant_reversal")
-	})
-	if err != nil {
-		t.Fatalf("EnqueueReverse: %v", err)
-	}
+	// The reversal is queued first, for a tap that has no row of its own
+	// (charged before the market was wired up).
+	reverse(t, pool, tapID, "merchant_reversal")
 	w := &Worker{Pool: pool, Client: client}
 	if _, _, err := w.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if r := read(t, pool, tapID, KindReverse); r.State != StatePending || r.Attempts != 0 {
+	if r := read(t, pool, tapID, KindReverse); r.State != StateQueued || r.Attempts != 0 {
 		t.Errorf("reverse row = %+v, want untouched until the tap is delivered", r)
 	}
 	if f.callsFor(tapID) != 0 {
 		t.Fatalf("a reversal was delivered before its tap")
 	}
 
+	// Its tap row turns up after all, and is released.
 	enqueue(t, pool, TapEvent{TapID: tapID, Cardholder: cardholder, Merchant: uuid.New(),
 		Amount: money.Naira(10_000), At: time.Now()})
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE equity_outbox SET state = 'queued' WHERE tap_id = $1 AND kind = 'tap'`, tapID); err != nil {
+		t.Fatal(err)
+	}
 
 	// One tick delivers the tap; the reversal is only eligible once the
 	// tap's delivery is committed, so it goes on the next.
@@ -459,8 +545,8 @@ func TestAReversalWaitsForItsTap(t *testing.T) {
 	if r := read(t, pool, tapID, KindTap); r.State != StateDelivered {
 		t.Fatalf("tap row = %+v, want delivered", r)
 	}
-	if r := read(t, pool, tapID, KindReverse); r.State != StatePending {
-		t.Fatalf("reverse row = %+v, want still pending on the tick that delivered its tap", r)
+	if r := read(t, pool, tapID, KindReverse); r.State != StateQueued {
+		t.Fatalf("reverse row = %+v, want still queued on the tick that delivered its tap", r)
 	}
 	if _, _, err := w.Tick(context.Background()); err != nil {
 		t.Fatal(err)
@@ -476,6 +562,298 @@ func TestAReversalWaitsForItsTap(t *testing.T) {
 	_ = json.Unmarshal(r.Response, &resp)
 	if resp.State != "reversed" || resp.UnwoundUnits != 12_500_000 {
 		t.Errorf("stored reverse response = %+v", resp)
+	}
+}
+
+// The fee that funds a buyback is earned when the merchant is paid, so
+// nothing reaches the market until the tap is settled.
+func TestATapIsHeldUntilTheMerchantIsPaid(t *testing.T) {
+	pool := testPool(t)
+	f, client := stub(t)
+	tapID, _ := charge(t, pool, newUser(t, pool, "Ada", "Okafor"), money.Naira(10_000))
+	w := &Worker{Pool: pool, Client: client}
+
+	if r := read(t, pool, tapID, KindTap); r.State != StateHeld {
+		t.Fatalf("row = %+v, want held", r)
+	}
+	// No leg at all: nothing to release, nothing delivered.
+	if released, err := ReleaseIfSettled(context.Background(), pool, tapID); err != nil || released {
+		t.Errorf("released a tap with no settlement: %v %v", released, err)
+	}
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.callsFor(tapID) != 0 || read(t, pool, tapID, KindTap).State != StateHeld {
+		t.Fatalf("a held tap was delivered")
+	}
+
+	// The order is on chain but not filled: still held.
+	usdcLeg(t, pool, tapID, "submitted")
+	if released, _ := ReleaseIfSettled(context.Background(), pool, tapID); released {
+		t.Error("released on a submitted order")
+	}
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.callsFor(tapID) != 0 {
+		t.Fatalf("delivered before the order was fulfilled")
+	}
+
+	// The provider paid the merchant.
+	usdcLeg(t, pool, tapID, "fulfilled")
+	if released, err := ReleaseIfSettled(context.Background(), pool, tapID); err != nil || !released {
+		t.Fatalf("release after fulfilment: %v %v", released, err)
+	}
+	if r := read(t, pool, tapID, KindTap); r.State != StateQueued {
+		t.Fatalf("row = %+v, want queued", r)
+	}
+	// And a second release is a no-op, not a second queueing.
+	if released, _ := ReleaseIfSettled(context.Background(), pool, tapID); released {
+		t.Error("released twice")
+	}
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.callsFor(tapID) != 1 || read(t, pool, tapID, KindTap).State != StateDelivered {
+		t.Errorf("tap sent %d times, state %s; want once, delivered", f.callsFor(tapID), read(t, pool, tapID, KindTap).State)
+	}
+}
+
+func TestANairaTapIsReleasedWhenItsLegSettles(t *testing.T) {
+	pool := testPool(t)
+	f, client := stub(t)
+	tapID, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(2_000))
+	w := &Worker{Pool: pool, Client: client}
+
+	ngnLeg(t, pool, tapID, "submitted")
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.callsFor(tapID) != 0 || read(t, pool, tapID, KindTap).State != StateHeld {
+		t.Fatalf("delivered while the naira leg was in flight")
+	}
+
+	ngnLeg(t, pool, tapID, "settled")
+	if released, err := ReleaseIfSettled(context.Background(), pool, tapID); err != nil || !released {
+		t.Fatalf("release after the naira leg settled: %v %v", released, err)
+	}
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.callsFor(tapID) != 1 || read(t, pool, tapID, KindTap).State != StateDelivered {
+		t.Errorf("naira tap not delivered after its leg settled")
+	}
+}
+
+func TestAMixedTapNeedsBothLegs(t *testing.T) {
+	pool := testPool(t)
+	tapID, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(2_000))
+
+	usdcLeg(t, pool, tapID, "fulfilled")
+	ngnLeg(t, pool, tapID, "submitted")
+	if released, _ := ReleaseIfSettled(context.Background(), pool, tapID); released {
+		t.Fatal("released with the naira leg outstanding")
+	}
+	ngnLeg(t, pool, tapID, "settled")
+	usdcLeg(t, pool, tapID, "submitted")
+	if released, _ := ReleaseIfSettled(context.Background(), pool, tapID); released {
+		t.Fatal("released with the USDC leg outstanding")
+	}
+	usdcLeg(t, pool, tapID, "fulfilled")
+	if released, err := ReleaseIfSettled(context.Background(), pool, tapID); err != nil || !released {
+		t.Fatalf("both legs settled: released=%v err=%v", released, err)
+	}
+	if r := read(t, pool, tapID, KindTap); r.State != StateQueued {
+		t.Errorf("row = %+v, want queued", r)
+	}
+
+	// A failed leg never releases.
+	failed, _ := charge(t, pool, newUser(t, pool, "C", "D"), money.Naira(2_000))
+	usdcLeg(t, pool, failed, "fulfilled")
+	ngnLeg(t, pool, failed, "failed")
+	if released, _ := ReleaseIfSettled(context.Background(), pool, failed); released {
+		t.Error("released a tap whose naira leg failed")
+	}
+}
+
+// A leg that settled without calling ReleaseIfSettled cannot strand the
+// shares: the worker sweeps every tick.
+func TestTheSweepReleasesAStrandedHeldRow(t *testing.T) {
+	pool := testPool(t)
+	f, client := stub(t)
+	tapID, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(2_000))
+	usdcLeg(t, pool, tapID, "fulfilled") // no ReleaseIfSettled
+
+	if r := read(t, pool, tapID, KindTap); r.State != StateHeld {
+		t.Fatalf("row = %+v, want held", r)
+	}
+	n, err := ReleaseSettled(context.Background(), pool)
+	if err != nil || n < 1 {
+		t.Fatalf("sweep released %d, err %v", n, err)
+	}
+	if r := read(t, pool, tapID, KindTap); r.State != StateQueued {
+		t.Fatalf("row = %+v, want queued by the sweep", r)
+	}
+
+	// The tick itself sweeps, so a stranded row is delivered on the tick
+	// after its tap settles.
+	other, _ := charge(t, pool, newUser(t, pool, "E", "F"), money.Naira(2_000))
+	ngnLeg(t, pool, other, "settled")
+	if _, _, err := (&Worker{Pool: pool, Client: client}).Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.callsFor(other) != 1 || read(t, pool, other, KindTap).State != StateDelivered {
+		t.Errorf("the tick did not release and deliver a stranded row")
+	}
+}
+
+// A tap reversed before the market heard of it has nothing to unwind:
+// the row is cancelled and nothing is ever sent.
+func TestAReversalBeforeDeliveryCancelsTheTap(t *testing.T) {
+	pool := testPool(t)
+	f, client := stub(t)
+	w := &Worker{Pool: pool, Client: client}
+
+	// Held.
+	held, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(2_000))
+	reverse(t, pool, held, "customer_returned")
+	r := read(t, pool, held, KindTap)
+	if r.State != StateCancelled || r.LastError == nil || !strings.Contains(*r.LastError, "customer_returned") {
+		t.Fatalf("held row after reversal = %+v, want cancelled with the reason", r)
+	}
+	if rowCount(t, pool, held, KindReverse) != 0 {
+		t.Error("a reversal was queued for a tap the market never heard of")
+	}
+	// Even if it settles afterwards, it stays cancelled.
+	usdcLeg(t, pool, held, "fulfilled")
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.callsFor(held) != 0 || read(t, pool, held, KindTap).State != StateCancelled {
+		t.Errorf("a cancelled tap reached the market")
+	}
+
+	// Queued but not yet delivered.
+	queued, _ := charge(t, pool, newUser(t, pool, "C", "D"), money.Naira(2_000))
+	usdcLeg(t, pool, queued, "fulfilled")
+	if released, _ := ReleaseIfSettled(context.Background(), pool, queued); !released {
+		t.Fatal("not released")
+	}
+	reverse(t, pool, queued, "duplicate")
+	if read(t, pool, queued, KindTap).State != StateCancelled || rowCount(t, pool, queued, KindReverse) != 0 {
+		t.Errorf("queued row not cancelled by reversal")
+	}
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.callsFor(queued) != 0 {
+		t.Errorf("a cancelled tap reached the market")
+	}
+}
+
+func TestAReversalAfterDeliveryIsSentToTheMarket(t *testing.T) {
+	pool := testPool(t)
+	f, client := stub(t)
+	w := &Worker{Pool: pool, Client: client}
+	tapID, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(2_000))
+	usdcLeg(t, pool, tapID, "fulfilled")
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, pool, tapID, KindTap).State != StateDelivered {
+		t.Fatal("tap not delivered")
+	}
+
+	reverse(t, pool, tapID, "customer_returned")
+	if read(t, pool, tapID, KindTap).State != StateDelivered {
+		t.Error("a delivered row was touched by the reversal")
+	}
+	if r := read(t, pool, tapID, KindReverse); r.State != StateQueued {
+		t.Fatalf("reverse row = %+v, want queued", r)
+	}
+	if _, _, err := w.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if read(t, pool, tapID, KindReverse).State != StateDelivered || f.callsFor(tapID) != 2 {
+		t.Errorf("reversal not delivered: calls=%d", f.callsFor(tapID))
+	}
+}
+
+// A reversal that arrives while the tap is being delivered cannot decide
+// "never sent" a moment before it is: the row is locked for the delivery,
+// so the reversal waits and then queues a reversal of the delivered tap.
+func TestAReversalCannotCrossADeliveryInFlight(t *testing.T) {
+	pool := testPool(t)
+	f, client := stub(t)
+	f.hold, f.entered = make(chan struct{}), make(chan struct{})
+	tapID, _ := charge(t, pool, newUser(t, pool, "A", "B"), money.Naira(2_000))
+	usdcLeg(t, pool, tapID, "fulfilled")
+	if released, _ := ReleaseIfSettled(context.Background(), pool, tapID); !released {
+		t.Fatal("not released")
+	}
+
+	ticked := make(chan error, 1)
+	go func() {
+		_, _, err := (&Worker{Pool: pool, Client: client}).Tick(context.Background())
+		ticked <- err
+	}()
+	<-f.entered // the worker is inside the call, row locked
+
+	reversed := make(chan error, 1)
+	go func() {
+		reversed <- movements.InTx(context.Background(), pool, func(tx pgx.Tx) error {
+			return RecordReversal(context.Background(), tx, tapID, "customer_returned")
+		})
+	}()
+	select {
+	case err := <-reversed:
+		t.Fatalf("the reversal did not wait for the delivery in flight (err %v)", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(f.hold)
+	if err := <-ticked; err != nil {
+		t.Fatalf("Tick: %v", err)
+	}
+	if err := <-reversed; err != nil {
+		t.Fatalf("RecordReversal: %v", err)
+	}
+	if read(t, pool, tapID, KindTap).State != StateDelivered {
+		t.Errorf("tap row = %+v, want delivered", read(t, pool, tapID, KindTap))
+	}
+	if r := read(t, pool, tapID, KindReverse); r.State != StateQueued {
+		t.Errorf("reverse row = %+v, want queued: the market was told and must be told to unwind", r)
+	}
+}
+
+func TestUnsentTapsAreListedForTheCardholder(t *testing.T) {
+	pool := testPool(t)
+	cardholder := newUser(t, pool, "A", "B")
+	held, _ := charge(t, pool, cardholder, money.Naira(2_000))
+	queued, _ := charge(t, pool, cardholder, money.Naira(3_000))
+	usdcLeg(t, pool, queued, "fulfilled")
+	if released, _ := ReleaseIfSettled(context.Background(), pool, queued); !released {
+		t.Fatal("not released")
+	}
+	delivered, _ := charge(t, pool, cardholder, money.Naira(4_000))
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE equity_outbox SET state = 'delivered' WHERE tap_id = $1`, delivered); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, _ := charge(t, pool, cardholder, money.Naira(5_000))
+	reverse(t, pool, cancelled, "x")
+
+	rows, err := UnsentFor(context.Background(), pool, cardholder, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].TapID != queued || rows[0].State != StateQueued ||
+		rows[1].TapID != held || rows[1].State != StateHeld ||
+		rows[1].Amount.Minor() != 200_000 || rows[1].Merchant == uuid.Nil {
+		t.Errorf("unsent = %+v", rows)
+	}
+	if rows, _ := UnsentFor(context.Background(), pool, cardholder, 1); len(rows) != 1 || rows[0].TapID != queued {
+		t.Errorf("limit 1 = %+v", rows)
 	}
 }
 
