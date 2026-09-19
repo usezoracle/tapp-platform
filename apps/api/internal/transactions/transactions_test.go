@@ -98,8 +98,8 @@ func build(t *testing.T, pool *pgxpool.Pool) world {
 			}
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO card_taps (id, card_id, cardholder_id, merchant_id, currency,
-				                       amount_minor, fee_minor, tier, ledger_tx_id, nonce)
-				VALUES ($1, $2, $3, $4, 'NGN', $5, $6, 'none', $7, $8)`,
+				                       amount_minor, fee_minor, tier, funded_usdc_minor, ledger_tx_id, nonce)
+				VALUES ($1, $2, $3, $4, 'NGN', $5, $6, 'none', $5, $7, $8)`,
 				id, uuid.New(), w.cardholder, w.merchantProfile, amount.Minor(), fee.Minor(), ledgerTx, uuid.NewString()); err != nil {
 				return err
 			}

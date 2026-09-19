@@ -136,6 +136,29 @@ func (a *Adapter) Transfer(ctx context.Context, req baas.TransferRequest) (*baas
 	}, nil
 }
 
+// TransferFromWallet pays a bank account out of a customer wallet. See
+// baas.WalletTransferer and Client.CustomerTransfer.
+func (a *Adapter) TransferFromWallet(ctx context.Context, req baas.WalletTransferRequest) (*baas.Transfer, error) {
+	if req.PaymentReference == "" || req.SourceID == "" {
+		return nil, fmt.Errorf("fintava: a wallet transfer needs a source customer and a payment reference")
+	}
+	res, err := a.c.CustomerTransfer(ctx, req.SourceID, req.PaymentReference, req.Amount,
+		req.BeneficiaryAccount, req.BeneficiaryName, req.BeneficiaryBankCode, req.Narration)
+	if err != nil {
+		return nil, err
+	}
+	return &baas.Transfer{
+		Reference:        orDefault(res.AnyReference(), req.PaymentReference),
+		PaymentReference: req.PaymentReference,
+		Amount:           req.Amount,
+		Fees:             res.Charges.Decimal,
+		Status:           normalizeStatus(res.Status),
+		RawStatus:        res.Status,
+		Message:          res.Message,
+		CreditAccount:    req.BeneficiaryAccount,
+	}, nil
+}
+
 // TransferStatus looks a transfer up by reference.
 func (a *Adapter) TransferStatus(ctx context.Context, providerRef string) (*baas.Transfer, error) {
 	res, err := a.c.TransactionByReference(ctx, providerRef)
@@ -225,14 +248,22 @@ func (a *Adapter) CreateSubAccount(ctx context.Context, req baas.CreateSubAccoun
 // customer opened before wallet ids were recorded. searchTerm is the
 // email the customer was opened with. See baas.WalletLocator.
 func (a *Adapter) LocateWallet(ctx context.Context, searchTerm, accountNumber string) (string, error) {
+	_, walletID, err := a.LocateCustomer(ctx, searchTerm, accountNumber)
+	return walletID, err
+}
+
+// LocateCustomer finds both handles behind an account number: the customer
+// id a transfer is sourced from and the wallet id a balance is read by. See
+// baas.CustomerLocator.
+func (a *Adapter) LocateCustomer(ctx context.Context, searchTerm, accountNumber string) (customerID, walletID string, err error) {
 	cu, err := a.c.FindCustomerWallet(ctx, searchTerm, accountNumber)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if cu.WalletID() == "" {
-		return "", fmt.Errorf("fintava: customer holding %s has no wallet id", accountNumber)
+		return "", "", fmt.Errorf("fintava: customer holding %s has no wallet id", accountNumber)
 	}
-	return cu.WalletID(), nil
+	return cu.CustomerID(), cu.WalletID(), nil
 }
 
 // VerifyWebhook checks x-fintava-signature: HMAC-SHA512 over the RAW
@@ -264,9 +295,22 @@ type webhookPayload struct {
 		MerchantReference string      `json:"merchantReference"`
 		Status            string      `json:"status"`
 		PaymentStatus     string      `json:"paymentStatus"`
-		AccountNumber     string      `json:"accountNumber"`
-		VirtualAcctNo     string      `json:"virtualAcctNo"`
-		TargetAcctNo      string      `json:"target_customer_accno"`
+		// The credited account. Fintava names it differently per event;
+		// `accountNumber` on an account_funded event is the PAYER's account,
+		// which is why it is read last. Same priority as the Zerocard
+		// backbone's HandleFintavaDepositUseCase, which shares this feed.
+		BeneficiaryAcctNo string `json:"beneficiaryAccountNumber"`
+		VirtualAcctNo     string `json:"virtualAcctNo"`
+		DestinationAcctNo string `json:"destinationAccountNumber"`
+		TargetAcctNo      string `json:"target_customer_accno"`
+		CustomerAcctNo    string `json:"customer_account_number"`
+		Wallet            struct {
+			AccountNumber string `json:"accountNumber"`
+			ID            string `json:"id"`
+		} `json:"wallet"`
+		AccountNumberSnk string `json:"account_number"`
+		AccountNumber    string `json:"accountNumber"`
+		CustomerID       string `json:"customerId"`
 	} `json:"data"`
 }
 
@@ -290,7 +334,10 @@ func (a *Adapter) ParseWebhook(body []byte) (*baas.WebhookEvent, error) {
 		Status:           normalizeStatus(rawStatus),
 		RawStatus:        rawStatus,
 		Amount:           p.Data.Amount.String(),
-		AccountNumber:    firstNonEmpty(p.Data.AccountNumber, p.Data.VirtualAcctNo, p.Data.TargetAcctNo),
+		AccountNumber: firstNonEmpty(p.Data.BeneficiaryAcctNo, p.Data.VirtualAcctNo, p.Data.DestinationAcctNo,
+			p.Data.TargetAcctNo, p.Data.CustomerAcctNo, p.Data.Wallet.AccountNumber, p.Data.AccountNumberSnk,
+			p.Data.AccountNumber),
+		CustomerID: firstNonEmpty(p.Data.CustomerID, p.Data.Wallet.ID),
 	}
 	switch evType {
 	case "account_funded", "customer_wallet_credited", "virtual_wallet_payment":

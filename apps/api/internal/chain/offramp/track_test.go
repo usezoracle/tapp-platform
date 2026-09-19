@@ -178,12 +178,12 @@ func submittedTap(t *testing.T, pool *pgxpool.Pool, s *Settler, txHash string) (
 		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO card_taps (id, card_id, cardholder_id, merchant_id, currency,
-			                       amount_minor, fee_minor, tier, ledger_tx_id, nonce)
-			VALUES ($1, $2, $3, $4, 'NGN', $5, $6, 'none', $7, $8)`,
+			                       amount_minor, fee_minor, tier, funded_usdc_minor, ledger_tx_id, nonce)
+			VALUES ($1, $2, $3, $4, 'NGN', $5, $6, 'none', $5, $7, $8)`,
 			tap, uuid.New(), cardholder, merchant, amount.Minor(), fee.Minor(), ledgerTx, uuid.NewString()); err != nil {
 			return err
 		}
-		if err := s.Record(ctx, tx, tap, realSender.Hex(), 1_208_679); err != nil {
+		if err := s.Record(ctx, tx, tap, realSender.Hex(), 1_208_679, owed); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `

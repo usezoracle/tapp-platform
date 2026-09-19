@@ -277,3 +277,98 @@ func MerchantPayoutReturned(
 		{AccountID: owed, Amount: amount, Reason: "merchant_payout.still_owed"},
 	})
 }
+
+// -----------------------------------------------------------------------------
+// Settling a tap's naira leg from the cardholder's own wallet
+//
+// A tap paid from a naira balance is settled by paying the merchant's bank
+// straight out of the cardholder's own wallet at the rail. The platform is
+// not the payer, any more than it is when USDC is sold on chain: the money
+// goes from the cardholder's asset to the merchant's bank, and the books say
+// the same thing they say for the on-chain leg -- the claim leaves entirely
+// when the rail is asked, and comes back if the rail refuses. Keyed on the
+// tap, so its own timeline (transactions.Events) shows every step.
+//
+// Attempt is which ask of the rail this is. A failed attempt returns the
+// claim; a retry discharges it again, and that is a new movement, not a
+// replay of the first.
+// -----------------------------------------------------------------------------
+
+// MerchantSettledFromWallet discharges the naira leg of what a merchant is
+// owed, when the cardholder's wallet is asked to pay it.
+func MerchantSettledFromWallet(
+	ctx context.Context,
+	tx pgx.Tx,
+	merchant uuid.UUID,
+	amount money.Amount,
+	tapID uuid.UUID,
+	attempt int,
+) (uuid.UUID, error) {
+	if !amount.IsPositive() {
+		return uuid.Nil, fmt.Errorf("movements: a wallet settlement must be positive, got %s", amount)
+	}
+
+	c := amount.Currency()
+	r := newResolver(ctx, tx)
+
+	// A merchant cannot be discharged of more than they are owed. See Tap.
+	owed := r.account(ledger.Merchant(merchant), ledger.KindMerchantPayable, c)
+	if r.err != nil {
+		return uuid.Nil, r.err
+	}
+	if err := ensureFunds(ctx, tx, owed, amount); err != nil {
+		return uuid.Nil, err
+	}
+
+	external := r.account(ledger.System(), ledger.KindExternal, c)
+	if r.err != nil {
+		return uuid.Nil, r.err
+	}
+
+	return ledger.Post(ctx, tx, ledger.Ref{
+		Type:    "merchant_settled_wallet",
+		ID:      &tapID,
+		IdemKey: fmt.Sprintf("merchant_settled_wallet:%s:%d", tapID, attempt),
+	}, []ledger.Entry{
+		{AccountID: owed, Amount: amount.Neg(), Reason: "merchant.settled_from_wallet"},
+		{AccountID: external, Amount: amount, Reason: "merchant.paid_by_cardholder_wallet"},
+	})
+}
+
+// MerchantWalletSettlementReturned puts the naira leg's claim back after the
+// rail refused to pay it. The exact mirror of MerchantSettledFromWallet, for
+// the same reason MerchantSettlementRefunded mirrors the on-chain discharge:
+// nobody paid, and the claim belongs where the audit can see it.
+func MerchantWalletSettlementReturned(
+	ctx context.Context,
+	tx pgx.Tx,
+	merchant uuid.UUID,
+	amount money.Amount,
+	tapID uuid.UUID,
+	attempt int,
+	reason string,
+) (uuid.UUID, error) {
+	if !amount.IsPositive() {
+		return uuid.Nil, fmt.Errorf("movements: a returned wallet settlement must be positive, got %s", amount)
+	}
+	if reason == "" {
+		return uuid.Nil, fmt.Errorf("movements: a returned wallet settlement must say why")
+	}
+
+	c := amount.Currency()
+	r := newResolver(ctx, tx)
+	external := r.account(ledger.System(), ledger.KindExternal, c)
+	owed := r.account(ledger.Merchant(merchant), ledger.KindMerchantPayable, c)
+	if r.err != nil {
+		return uuid.Nil, r.err
+	}
+
+	return ledger.Post(ctx, tx, ledger.Ref{
+		Type:    "merchant_wallet_settlement_returned",
+		ID:      &tapID,
+		IdemKey: fmt.Sprintf("merchant_wallet_settlement_returned:%s:%d", tapID, attempt),
+	}, []ledger.Entry{
+		{AccountID: external, Amount: amount.Neg(), Reason: "merchant.wallet_refused:" + reason},
+		{AccountID: owed, Amount: amount, Reason: "merchant.still_owed"},
+	})
+}

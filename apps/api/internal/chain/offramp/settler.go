@@ -81,18 +81,27 @@ func (s *Settler) now() time.Time {
 	return time.Now()
 }
 
-// Record notes that a tap needs settling.
+// Record notes that a tap needs settling on chain: deliver is what this
+// leg pays the merchant, and sellMicro the USDC estimated to cover it.
 //
 // Written by the tap, in the tap's own transaction, so a charge cannot exist
 // without a record that it has to be settled. The primary key on tap_id is
 // what makes one payment open one order and no more.
+//
+// deliver is what the on-chain leg owes the merchant. It is the whole of the
+// tap less the fee when the tap was paid entirely by converting USDC, and
+// less again when part of the tap came from a naira balance, which the naira
+// leg pays for (internal/settlement/naira).
 func (s *Settler) Record(
-	ctx context.Context, q Execer, tapID uuid.UUID, from string, sellMicro int64,
+	ctx context.Context, q Execer, tapID uuid.UUID, from string, sellMicro int64, deliver money.Amount,
 ) error {
+	if !deliver.IsPositive() {
+		return fmt.Errorf("offramp: an order must deliver a positive amount, got %s", deliver)
+	}
 	_, err := q.Exec(ctx, `
-		INSERT INTO card_tap_settlements (tap_id, from_address, sell_micro)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (tap_id) DO NOTHING`, tapID, from, sellMicro)
+		INSERT INTO card_tap_settlements (tap_id, from_address, sell_micro, deliver_minor)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (tap_id) DO NOTHING`, tapID, from, sellMicro, deliver.Minor())
 	if err != nil {
 		return fmt.Errorf("offramp: record tap settlement: %w", err)
 	}
@@ -122,7 +131,7 @@ func (s *Settler) Tick(ctx context.Context) (created int, err error) {
 	// after a reversal must not undo that from the chain side.
 	rows, err := s.Pool.Query(ctx, `
 		SELECT st.tap_id, st.from_address, st.sell_micro, st.attempts, st.round,
-		       t.merchant_id, t.currency, t.amount_minor - t.fee_minor,
+		       t.merchant_id, t.currency, coalesce(st.deliver_minor, t.amount_minor - t.fee_minor),
 		       b.bank_code, b.account_number, b.account_name
 		  FROM card_tap_settlements st
 		  JOIN card_taps t ON t.id = st.tap_id
@@ -154,10 +163,11 @@ func (s *Settler) Tick(ctx context.Context) (created int, err error) {
 	for rows.Next() {
 		var (
 			p pending
-			// What the MERCHANT receives: the tap less the platform's fee.
-			// Selling against the gross would deliver them money the ledger
-			// says is ours, and pairing that with an on-chain sender fee
-			// would take the same margin twice.
+			// What the MERCHANT receives from this leg: the tap less the
+			// platform's fee, less whatever the naira leg pays. Selling
+			// against the gross would deliver them money the ledger says is
+			// ours, and pairing that with an on-chain sender fee would take
+			// the same margin twice.
 			cur   string
 			minor int64
 		)
@@ -301,7 +311,7 @@ func (s *Settler) Track(ctx context.Context) (resolved int, err error) {
 
 	rows, err := s.Pool.Query(ctx, `
 		SELECT st.tap_id, st.from_address, st.sell_micro, st.tx_hash, st.order_id, st.round,
-		       t.merchant_id, t.currency, t.amount_minor - t.fee_minor
+		       t.merchant_id, t.currency, coalesce(st.deliver_minor, t.amount_minor - t.fee_minor)
 		  FROM card_tap_settlements st
 		  JOIN card_taps t ON t.id = st.tap_id
 		 WHERE st.state = 'submitted'

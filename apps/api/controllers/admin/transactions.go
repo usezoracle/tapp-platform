@@ -45,11 +45,19 @@ type transactionView struct {
 	CardholderEmail string   `json:"cardholder_email,omitempty"`
 	Bank            bankView `json:"bank"`
 
-	// The sale paying for a tap.
-	SoldUSDC  string `json:"sold_usdc,omitempty"`
-	Round     int    `json:"round"`
-	OrderID   string `json:"order_id,omitempty"`
-	TxHash    string `json:"tx_hash,omitempty"`
+	// What pays the merchant: paycrest (the cardholder's USDC sold on
+	// chain), fintava (naira paid out of the cardholder's own wallet), or
+	// mixed (both). Empty for an offramp. Legs has each leg's own state.
+	SettlementRail string    `json:"settlement_rail,omitempty"`
+	Legs           []legView `json:"legs,omitempty"`
+
+	// The sale paying for a tap with a paycrest leg.
+	SoldUSDC string `json:"sold_usdc,omitempty"`
+	Round    int    `json:"round"`
+	OrderID  string `json:"order_id,omitempty"`
+	TxHash   string `json:"tx_hash,omitempty"`
+	// The bank rail's reference for a tap on the fintava rail.
+	RailRef   string `json:"rail_ref,omitempty"`
 	LastError string `json:"last_error,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 
@@ -60,6 +68,28 @@ type transactionView struct {
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 	SettledAt string `json:"settled_at,omitempty"`
+}
+
+// legView is one rail's share of a tap.
+type legView struct {
+	Rail      string `json:"rail"` // paycrest | fintava
+	Amount    string `json:"amount"`
+	Status    string `json:"status"` // pending | processing | settled | failed
+	Reference string `json:"reference,omitempty"`
+	Error     string `json:"error,omitempty"`
+	SettledAt string `json:"settled_at,omitempty"`
+}
+
+func legsOf(legs []transactions.Leg) []legView {
+	out := make([]legView, 0, len(legs))
+	for _, l := range legs {
+		v := legView{Rail: l.Rail, Amount: plain(l.Amount), Status: l.Status, Reference: l.Reference, Error: l.Error}
+		if l.SettledAt != nil {
+			v.SettledAt = l.SettledAt.UTC().Format(tsLayout)
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // equityView is a tap's outcome on the equity market.
@@ -118,7 +148,9 @@ func view(t transactions.Transaction) transactionView {
 		Bank: bankView{
 			Institution: t.Bank.Institution, AccountNumber: t.Bank.AccountNumber, AccountName: t.Bank.AccountName,
 		},
-		Round: t.Round, OrderID: t.OrderID, TxHash: t.TxHash, LastError: t.LastError, Reason: t.Reason,
+		SettlementRail: t.SettlementRail, Legs: legsOf(t.Legs),
+		Round: t.Round, OrderID: t.OrderID, TxHash: t.TxHash, RailRef: t.RailRef,
+		LastError: t.LastError, Reason: t.Reason,
 		Equity:    equityOf(t.Equity),
 		CreatedAt: t.CreatedAt.UTC().Format(tsLayout),
 		UpdatedAt: t.UpdatedAt.UTC().Format(tsLayout),

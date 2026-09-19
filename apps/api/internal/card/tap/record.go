@@ -21,8 +21,11 @@ type tapRecord struct {
 	Amount     money.Amount
 	Fee        money.Amount
 	Tier       auth.Tier
-	LedgerTx   uuid.UUID
-	Nonce      []byte
+	// Funding is where the money came from, decided by fundTap in this same
+	// transaction. Settlement reads it to choose the rails.
+	Funding  Funding
+	LedgerTx uuid.UUID
+	Nonce    []byte
 	// At is the service's clock, not the database's: the same clock the
 	// daily window and the repeat window are judged by.
 	At time.Time
@@ -35,10 +38,14 @@ func recordTap(ctx context.Context, tx pgx.Tx, r tapRecord) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO card_taps
 			(id, card_id, cardholder_id, merchant_id, currency,
-			 amount_minor, fee_minor, tier, ledger_tx_id, nonce, created_at)
-		VALUES ($1, $2, $3, $4, $5::currency, $6, $7, $8, $9, $10, $11)`,
+			 amount_minor, fee_minor, tier,
+			 funding_source, funded_ngn_minor, funded_usdc_minor,
+			 ledger_tx_id, nonce, created_at)
+		VALUES ($1, $2, $3, $4, $5::currency, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		r.ID, r.CardID, r.Cardholder, r.Merchant, string(r.Amount.Currency()),
-		r.Amount.Minor(), r.Fee.Minor(), string(r.Tier), r.LedgerTx, r.Nonce, r.At)
+		r.Amount.Minor(), r.Fee.Minor(), string(r.Tier),
+		string(r.Funding.Source()), r.Funding.NGN.Minor(), r.Funding.USDC.Minor(),
+		r.LedgerTx, r.Nonce, r.At)
 	if err != nil {
 		return fmt.Errorf("tap: record tap: %w", err)
 	}

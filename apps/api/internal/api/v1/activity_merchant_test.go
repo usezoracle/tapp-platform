@@ -60,8 +60,9 @@ func tapAt(t *testing.T, pool *pgxpool.Pool, cardholder, merchant uuid.UUID, amo
 			return err
 		}
 		_, err = tx.Exec(context.Background(), `
-			INSERT INTO card_taps (id, card_id, cardholder_id, merchant_id, currency, amount_minor, fee_minor, tier, ledger_tx_id)
-			VALUES ($1, $2, $3, $4, $5::currency, $6, 0, 'none', $7)`,
+			INSERT INTO card_taps (id, card_id, cardholder_id, merchant_id, currency, amount_minor, fee_minor, tier,
+			                       funded_usdc_minor, ledger_tx_id)
+			VALUES ($1, $2, $3, $4, $5::currency, $6, 0, 'none', $6, $7)`,
 			tapID, uuid.New(), cardholder, merchant, string(amount.Currency()), amount.Minor(), ledgerTx)
 		return err
 	})

@@ -82,12 +82,23 @@ type Transaction struct {
 	Fee    money.Amount
 	Owed   money.Amount
 
-	// The sale that pays for it, for a tap: how much USDC, and the order
-	// carrying it. Round counts the orders created for this tap.
+	// SettlementRail is what pays the merchant for a tap: "paycrest" when
+	// the cardholder's USDC is sold on chain and a provider pays them,
+	// "fintava" when they are paid out of the cardholder's own naira
+	// wallet, "mixed" when a tap has both legs. Empty for an offramp, and
+	// for a tap nothing was recorded for. Legs has each leg's own state.
+	SettlementRail string
+	Legs           []Leg
+
+	// The sale that pays for it, for a tap with a paycrest leg: how much
+	// USDC, and the order carrying it. Round counts the orders created for
+	// this tap.
 	SoldMicro int64
 	Round     int
 	OrderID   string
 	TxHash    string
+	// RailRef is the bank rail's own reference for a fintava leg.
+	RailRef   string
 	LastError string
 
 	Bank   Bank
@@ -97,6 +108,30 @@ type Transaction struct {
 	// never queued for it (the feature was off, or the tap was not naira).
 	Equity *Equity
 }
+
+// Leg is one rail's share of what a tap's merchant is owed, in its own
+// state. Status uses the same vocabulary as the transaction's, and the
+// transaction's status is derived from its legs: settled only when every leg
+// is, failed when any is.
+type Leg struct {
+	// Rail: paycrest (USDC sold on chain) or fintava (naira paid out of the
+	// cardholder's wallet).
+	Rail   string
+	Amount money.Amount
+	Status string
+	// Reference is the rail's own handle: the order id for paycrest, the
+	// transfer reference for fintava.
+	Reference string
+	Error     string
+	SettledAt *time.Time
+}
+
+// Rails.
+const (
+	RailPaycrest = "paycrest"
+	RailFintava  = "fintava"
+	RailMixed    = "mixed"
+)
 
 // Equity is a tap's outcome on the equity market.
 //
@@ -193,29 +228,46 @@ type Filter struct {
 
 // listSQL reads both kinds through one shape.
 //
-// The tap's status is decided here, from the three tables that hold it: a
-// reversal wins over everything, then the settlement's own state. A tap with
-// no settlement row is one the settler was never configured for, and it is
-// pending in the plain sense.
+// The tap's status is decided here, from the tables that hold it: a reversal
+// wins over everything, then the legs. A tap has up to two -- an on-chain
+// order for what was bought with USDC, a naira transfer out of the
+// cardholder's wallet for what came from a naira balance -- and it is
+// settled only when every leg it has is, failed when any is, processing when
+// any is in flight. A tap with no legs is one no settler was configured for,
+// and it is pending in the plain sense.
 const listSQL = `
 WITH all_txns AS (
     SELECT t.id, 'tap' AS kind,
-           t.created_at, coalesce(st.updated_at, t.created_at) AS updated_at,
-           CASE WHEN st.state = 'fulfilled' THEN st.updated_at END AS settled_at,
+           t.created_at, greatest(coalesce(ns.updated_at, t.created_at), coalesce(st.updated_at, t.created_at)) AS updated_at,
+           CASE WHEN (ns.tap_id IS NULL OR ns.state = 'settled')
+                 AND (st.tap_id IS NULL OR st.state = 'fulfilled')
+                THEN greatest(ns.settled_at, CASE WHEN st.state = 'fulfilled' THEN st.updated_at END) END AS settled_at,
            t.merchant_id AS merchant, t.cardholder_id AS cardholder, u.email AS cardholder_email,
            t.currency::text AS currency, t.amount_minor, t.fee_minor,
            CASE WHEN r.id IS NOT NULL THEN 'reversed'
-                WHEN st.state = 'submitted' THEN 'processing'
-                WHEN st.state = 'fulfilled' THEN 'settled'
-                WHEN st.state = 'failed'    THEN 'failed'
+                WHEN ns.state = 'failed'    OR st.state = 'failed'    THEN 'failed'
+                WHEN ns.state = 'submitted' OR st.state = 'submitted' THEN 'processing'
+                WHEN (ns.tap_id IS NOT NULL OR st.tap_id IS NOT NULL)
+                 AND (ns.tap_id IS NULL OR ns.state = 'settled')
+                 AND (st.tap_id IS NULL OR st.state = 'fulfilled') THEN 'settled'
                 ELSE 'pending' END AS status,
+           CASE WHEN ns.tap_id IS NOT NULL AND st.tap_id IS NOT NULL THEN 'mixed'
+                WHEN ns.tap_id IS NOT NULL THEN 'fintava'
+                WHEN st.tap_id IS NOT NULL THEN 'paycrest'
+                ELSE '' END AS settlement_rail,
            coalesce(st.sell_micro, 0) AS sold_micro, coalesce(st.round, 0) AS round,
-           st.order_id, st.tx_hash, st.last_error,
-           b.bank_code, b.account_number, b.account_name, r.reason,
+           st.order_id, st.tx_hash, ns.rail_ref, coalesce(ns.error, st.last_error) AS last_error,
+           st.state AS usdc_state, coalesce(st.deliver_minor, t.amount_minor - t.fee_minor) AS usdc_minor,
+           st.last_error AS usdc_error, CASE WHEN st.state = 'fulfilled' THEN st.updated_at END AS usdc_settled_at,
+           ns.state AS ngn_state, coalesce(ns.amount_minor, 0) AS ngn_minor, ns.error AS ngn_error, ns.settled_at AS ngn_settled_at,
+           coalesce(ns.bank_code, b.bank_code) AS bank_code,
+           coalesce(ns.account_number, b.account_number) AS account_number,
+           coalesce(ns.account_name, b.account_name) AS account_name, r.reason,
            eq.state AS equity_state, eqr.state AS equity_reverse_state, eq.response AS equity_response
       FROM card_taps t
-      LEFT JOIN card_tap_settlements st ON st.tap_id = t.id
-      LEFT JOIN card_tap_reversals   r  ON r.tap_id  = t.id
+      LEFT JOIN card_tap_settlements     st ON st.tap_id = t.id
+      LEFT JOIN card_tap_ngn_settlements ns ON ns.tap_id = t.id
+      LEFT JOIN card_tap_reversals       r  ON r.tap_id = t.id
       LEFT JOIN equity_outbox eq  ON eq.tap_id  = t.id AND eq.kind  = 'tap'
       LEFT JOIN equity_outbox eqr ON eqr.tap_id = t.id AND eqr.kind = 'reverse'
       LEFT JOIN users u ON u.id = t.cardholder_id
@@ -234,15 +286,20 @@ WITH all_txns AS (
            CASE o.state::text WHEN 'converting' THEN 'pending'
                               WHEN 'paying'     THEN 'processing'
                               ELSE o.state::text END,
-           0, 0, NULL, NULL, o.failure,
+           '',
+           0, 0, NULL, NULL, NULL, o.failure,
+           NULL, 0, NULL, NULL,
+           NULL, 0, NULL, NULL,
            o.bank_code, o.account_number, o.account_name, NULL,
            NULL, NULL, NULL
       FROM orders o
 )
 SELECT id, kind, created_at, updated_at, settled_at,
        merchant, cardholder, cardholder_email,
-       currency, amount_minor, fee_minor, status,
-       sold_micro, round, order_id, tx_hash, last_error,
+       currency, amount_minor, fee_minor, status, settlement_rail,
+       sold_micro, round, order_id, tx_hash, rail_ref, last_error,
+       usdc_state, usdc_minor, usdc_error, usdc_settled_at,
+       ngn_state, ngn_minor, ngn_error, ngn_settled_at,
        bank_code, account_number, account_name, reason,
        equity_state, equity_reverse_state, equity_response,
        count(*) OVER () AS total
@@ -315,6 +372,13 @@ func scan(rows pgx.Rows) (Transaction, int, error) {
 		cur                              string
 		amountMinor, feeMinor            int64
 		email, orderID, txHash, lastErr  *string
+		railRef                          *string
+		usdcState, usdcErr               *string
+		usdcMinor                        int64
+		usdcSettledAt                    *time.Time
+		ngnState, ngnErr                 *string
+		ngnMinor                         int64
+		ngnSettledAt                     *time.Time
 		bankCode, accountNo, accountName *string
 		reason                           *string
 		eqState, eqReverseState          *string
@@ -323,8 +387,10 @@ func scan(rows pgx.Rows) (Transaction, int, error) {
 	)
 	if err := rows.Scan(&t.ID, &t.Kind, &t.CreatedAt, &t.UpdatedAt, &t.SettledAt,
 		&t.Merchant, &t.Cardholder, &email,
-		&cur, &amountMinor, &feeMinor, &t.Status,
-		&t.SoldMicro, &t.Round, &orderID, &txHash, &lastErr,
+		&cur, &amountMinor, &feeMinor, &t.Status, &t.SettlementRail,
+		&t.SoldMicro, &t.Round, &orderID, &txHash, &railRef, &lastErr,
+		&usdcState, &usdcMinor, &usdcErr, &usdcSettledAt,
+		&ngnState, &ngnMinor, &ngnErr, &ngnSettledAt,
 		&bankCode, &accountNo, &accountName, &reason,
 		&eqState, &eqReverseState, &eqResponse,
 		&total); err != nil {
@@ -336,10 +402,45 @@ func scan(rows pgx.Rows) (Transaction, int, error) {
 	t.Owed = money.New(amountMinor-feeMinor, c)
 	t.CardholderEmail = str(email)
 	t.OrderID, t.TxHash, t.LastError = str(orderID), str(txHash), str(lastErr)
+	t.RailRef = str(railRef)
 	t.Bank = Bank{Institution: str(bankCode), AccountNumber: str(accountNo), AccountName: str(accountName)}
 	t.Reason = str(reason)
 	t.Equity = equityFrom(eqState, eqReverseState, eqResponse)
+
+	// Legs, naira first: it is the one paid straight from the cardholder's
+	// own money, and the on-chain one is what tops it up.
+	if ngnState != nil {
+		t.Legs = append(t.Legs, Leg{
+			Rail: RailFintava, Amount: money.New(ngnMinor, c), Status: legStatus(*ngnState),
+			Reference: t.RailRef, Error: str(ngnErr), SettledAt: ngnSettledAt,
+		})
+	}
+	if usdcState != nil {
+		t.Legs = append(t.Legs, Leg{
+			Rail: RailPaycrest, Amount: money.New(usdcMinor, c), Status: legStatus(*usdcState),
+			Reference: t.OrderID, Error: str(usdcErr), SettledAt: usdcSettledAt,
+		})
+	}
 	return t, total, nil
+}
+
+// legStatus maps a leg's own state onto the transaction vocabulary.
+//
+//	naira:  queued -> pending, submitted -> processing, settled, failed
+//	chain:  pending, submitted -> processing, fulfilled -> settled, failed
+func legStatus(state string) string {
+	switch state {
+	case "queued", "pending":
+		return StatusPending
+	case "submitted":
+		return StatusProcessing
+	case "settled", "fulfilled":
+		return StatusSettled
+	case "failed":
+		return StatusFailed
+	default:
+		return state
+	}
 }
 
 func str(p *string) string {

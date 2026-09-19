@@ -346,8 +346,11 @@ func senderRoutes(route *gin.Engine) {
 			// platform long naira against money nobody has spent yet.
 			Funding: money.Currency(viper.GetString("FUNDING_CURRENCY")),
 			Quoter:  apiv1.SharedQuoter(),
-			// The tap records what has to be sold; the settler sells it a
-			// moment later, from the cardholder's own account.
+			// The tap records what has to be settled and where the money
+			// came from; the wiring splits it between the rails. What was
+			// bought with USDC is sold a moment later from the cardholder's
+			// own account; what came from a naira balance is paid out of
+			// the cardholder's own naira wallet.
 			Settle: apiv1.RecordTapSettlement(offrampSettler),
 			// And that the equity market has to hear of it. Queued in the
 			// tap's transaction, delivered by a worker; nil without a
@@ -561,6 +564,12 @@ func cardsRoutes(route *gin.Engine) {
 	adminConsole.POST("deposits/ngn/accounts/:account_number/bank", ngnOps.SetBankName)
 	adminConsole.POST("deposits/ngn/accounts/:account_number/reconcile", ngnOps.ReconcileAccount)
 
+	// Naira legs: what taps took from naira balances, paid to merchants out
+	// of cardholders' own wallets. List them, and retry one the rail
+	// refused.
+	ngnSettlements := adminCtrl.NewNGNSettlementsController(apiv1.SharedNairaWorker())
+	adminConsole.GET("settlements/ngn", ngnSettlements.GetSettlements)
+	adminConsole.POST("settlements/ngn/:tap_id/retry", ngnSettlements.RetrySettlement)
 }
 
 // kycProvider builds the identity verifier, or nil when it is not configured.

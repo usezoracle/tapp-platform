@@ -32,6 +32,7 @@ import (
 	"github.com/usezoracle/tapp/api/ent/lpledgerentry"
 	userEnt "github.com/usezoracle/tapp/api/ent/user"
 	apiv1 "github.com/usezoracle/tapp/api/internal/api/v1"
+	"github.com/usezoracle/tapp/api/internal/settlement/naira"
 	"github.com/usezoracle/tapp/api/services/baas"
 	"github.com/usezoracle/tapp/api/services/baas/fintava"
 	"github.com/usezoracle/tapp/api/storage"
@@ -571,6 +572,12 @@ func (c *Controller) railWebhook(ctx *gin.Context, provider baas.Provider, sigHe
 		c.handleDeposit(ctx, ev)
 	case strings.HasPrefix(ev.PaymentReference, withdrawalRefPrefix):
 		c.handleWithdrawalFinality(ctx, ev)
+	case strings.HasPrefix(ev.PaymentReference, naira.ReferencePrefix):
+		// The naira leg of a card tap, paid out of the cardholder's wallet,
+		// reaching -- or not reaching -- the merchant's bank.
+		if _, err := apiv1.SharedNairaWorker().ApplyWebhook(ctx.Request.Context(), ev); err != nil {
+			logger.Errorf("naira settlement webhook (ref=%s): %v", ev.PaymentReference, err)
+		}
 	default:
 		// Not LP-related (other product flows share the rail) — ack.
 	}

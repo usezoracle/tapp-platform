@@ -122,6 +122,13 @@ type fixture struct {
 func newFixture(t *testing.T, earned money.Amount) *fixture {
 	t.Helper()
 	pool := testPool(t)
+	// The worker's Tick claims the oldest pending payouts first, whoever
+	// raised them. Other packages' tests share this database and leave
+	// payouts behind, so start from an empty queue or the batch fills with
+	// somebody else's rows and this test's payout never gets its turn.
+	if _, err := pool.Exec(context.Background(), `DELETE FROM payouts WHERE state IN ('pending','submitting')`); err != nil {
+		t.Fatalf("clear payouts: %v", err)
+	}
 	rail := &fakeRail{accountName: "ADA OKAFOR", status: baas.TransferSuccess}
 
 	merchant := uuid.New()

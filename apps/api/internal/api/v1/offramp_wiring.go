@@ -6,16 +6,18 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 	"github.com/spf13/viper"
 
 	"github.com/usezoracle/tapp/api/config"
+	"github.com/usezoracle/tapp/api/internal/card/tap"
 	"github.com/usezoracle/tapp/api/internal/chain/cdp"
 	"github.com/usezoracle/tapp/api/internal/chain/offramp"
 	"github.com/usezoracle/tapp/api/internal/money"
 	"github.com/usezoracle/tapp/api/internal/rates"
+	"github.com/usezoracle/tapp/api/internal/settlement/naira"
+	"github.com/usezoracle/tapp/api/services/baas"
 	paycrest "github.com/usezoracle/tapp/api/services/settlement"
 	"github.com/usezoracle/tapp/api/storage"
 	"github.com/usezoracle/tapp/api/utils/logger"
@@ -106,22 +108,46 @@ func SharedSettler() *offramp.Settler {
 	return settler
 }
 
-// RecordTapSettlement adapts the settler to what tap.Service calls.
+// RecordTapSettlement adapts the settlement rails to what tap.Service calls,
+// and splits what the merchant is owed between them.
+//
+// The split turns on where the tap's money came from, which only the tap
+// knows (tap.Charged.Legs):
+//
+//   - what the cardholder paid from a naira balance is paid to the merchant
+//     straight out of the cardholder's own wallet at the bank rail;
+//   - what the cardholder had to buy by converting USDC is paid by selling
+//     that USDC on chain to the settlement gateway, where a liquidity
+//     provider pays the merchant.
+//
+// One tap can have both legs, and each is recorded in the tap's own
+// transaction. Either leg that cannot be recorded -- no wallet, no bank
+// account, no deposit address -- fails the tap, because a charge that can
+// never reach the merchant is worse than a decline.
 //
 // The conversion from what the merchant is owed to what the cardholder must
 // sell happens here, at the wiring layer, because it is the one place that
 // knows both the card and the chain. The tap package does not learn what a
-// token is, and the offramp package does not learn what a card is.
-func RecordTapSettlement(s *offramp.Settler) func(
-	context.Context, pgx.Tx, uuid.UUID, uuid.UUID, money.Amount,
-) error {
-	if s == nil {
-		return nil
-	}
-	return func(
-		ctx context.Context, tx pgx.Tx, tapID, cardholder uuid.UUID, amount money.Amount,
-	) error {
-		address, _, ok, err := Rail().Addresses.Current(ctx, tx, cardholder)
+// token is, and neither settlement package learns what a card is.
+func RecordTapSettlement(s *offramp.Settler) func(context.Context, pgx.Tx, tap.Charged) error {
+	return func(ctx context.Context, tx pgx.Tx, c tap.Charged) error {
+		ngn, usdc := c.Legs()
+
+		if ngn.IsPositive() {
+			if err := naira.Record(ctx, tx, c.TapID, c.Cardholder, c.Merchant, nairaRail(), ngn); err != nil {
+				return err
+			}
+		}
+		if !usdc.IsPositive() {
+			return nil
+		}
+
+		if s == nil {
+			// No gateway: the tap charges and nothing is recorded for this
+			// leg, as before the naira leg existed. See SharedSettler.
+			return nil
+		}
+		address, _, ok, err := Rail().Addresses.Current(ctx, tx, c.Cardholder)
 		if err != nil {
 			return err
 		}
@@ -133,12 +159,22 @@ func RecordTapSettlement(s *offramp.Settler) func(
 			return errNoDepositAddress
 		}
 
-		sell, err := sellFor(ctx, amount)
+		sell, err := sellFor(ctx, usdc)
 		if err != nil {
 			return err
 		}
-		return s.Record(ctx, tx, tapID, address, sell)
+		return s.Record(ctx, tx, c.TapID, address, sell, usdc)
 	}
+}
+
+// nairaRail names the rail cardholders' naira wallets were opened on, which
+// is the one their naira legs are paid from. Empty when none is configured,
+// in which case a naira leg cannot be recorded and the tap is refused.
+func nairaRail() string {
+	if r := baas.Default(); r != nil {
+		return r.Name()
+	}
+	return ""
 }
 
 // sellFor is how much USDC covers what the merchant is owed.

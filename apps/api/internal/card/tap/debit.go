@@ -163,13 +163,15 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 		// In the same transaction as the debit: a conversion that commits
 		// without its tap would leave somebody's dollars exchanged for naira
 		// they never agreed to spend.
-		if funded, err := s.fundTap(ctx, tx, *k.Cardholder, req.Amount); err != nil {
+		funding, funded, err := s.fundTap(ctx, tx, *k.Cardholder, req.Amount)
+		if err != nil {
 			if errors.Is(err, movements.ErrInsufficientFunds) {
 				refusal = err
 				return nil
 			}
 			return err
-		} else if !funded {
+		}
+		if !funded {
 			refusal = fmt.Errorf("%w: no rate to price %s from %s",
 				ErrCannotPrice, req.Amount, s.Funding)
 			return nil
@@ -190,21 +192,29 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 		// 8.
 		if err := recordTap(ctx, tx, tapRecord{
 			ID: tapID, CardID: k.ID, Cardholder: *k.Cardholder, Merchant: req.MerchantID,
-			Amount: req.Amount, Fee: fee, Tier: challenge.Tier,
+			Amount: req.Amount, Fee: fee, Tier: challenge.Tier, Funding: funding,
 			LedgerTx: ledgerTx, Nonce: req.Nonce, At: now,
 		}); err != nil {
 			return err
 		}
 
-		// 8a. Note that this tap has to be settled on chain.
+		charged := Charged{
+			TapID: tapID, Cardholder: *k.Cardholder, Merchant: req.MerchantID,
+			Amount: req.Amount, Fee: fee, Funding: funding, At: now,
+		}
+
+		// 8a. Note that this tap has to be settled to the merchant.
 		//
 		// Written in the tap's own transaction, so a charge cannot exist
-		// without a record that the money still has to be sold. A settlement
-		// row with no tap would sell somebody's USDC for a payment that never
+		// without a record that the merchant still has to be paid. A
+		// settlement row with no tap would pay for a purchase that never
 		// happened; a tap with no settlement row is a merchant who is never
-		// paid, and neither is recoverable by looking at the other.
+		// paid, and neither is recoverable by looking at the other. Which
+		// rail pays which part is decided from the funding split, by whoever
+		// wired the hook; this package only reports where the money came
+		// from.
 		if s.Settle != nil {
-			if err := s.Settle(ctx, tx, tapID, *k.Cardholder, req.Amount); err != nil {
+			if err := s.Settle(ctx, tx, charged); err != nil {
 				return err
 			}
 		}
@@ -215,10 +225,7 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 		//     is a cardholder who never receives the shares their spend
 		//     earned. Neither is recoverable from the other.
 		if s.Equity != nil {
-			if err := s.Equity(ctx, tx, Charged{
-				TapID: tapID, Cardholder: *k.Cardholder, Merchant: req.MerchantID,
-				Amount: req.Amount, At: now,
-			}); err != nil {
+			if err := s.Equity(ctx, tx, charged); err != nil {
 				return err
 			}
 		}

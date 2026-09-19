@@ -55,6 +55,29 @@ type merchantOrderResponse struct {
 	// was never sent to one. Additive: an app that does not know about it
 	// ignores it.
 	Equity *equityView `json:"equity"`
+
+	// SettlementRail is what pays the merchant for a tap: "paycrest" (the
+	// cardholder's USDC sold on chain), "fintava" (naira paid out of the
+	// cardholder's own wallet) or "mixed" (both). Empty for an offramp.
+	// Legs has each leg's own amount and status. Additive, like Equity.
+	SettlementRail string    `json:"settlementRail,omitempty"`
+	Legs           []legView `json:"legs,omitempty"`
+}
+
+// legView is one rail's share of a tap, for the merchant app.
+type legView struct {
+	Rail      string `json:"rail"` // paycrest | fintava
+	Amount    string `json:"amount"`
+	Status    string `json:"status"` // pending | processing | settled | failed
+	Reference string `json:"reference,omitempty"`
+}
+
+func legsOf(legs []transactions.Leg) []legView {
+	out := make([]legView, 0, len(legs))
+	for _, l := range legs {
+		out = append(out, legView{Rail: l.Rail, Amount: units(l.Amount), Status: appStatus(l.Status), Reference: l.Reference})
+	}
+	return out
 }
 
 // equityView is a tap's outcome on the equity market, for the merchant app.
@@ -118,7 +141,8 @@ func merchantView(t transactions.Transaction) merchantOrderResponse {
 		GatewayID: t.OrderID, TxHash: t.TxHash, Reference: t.ID.String(),
 		SenderFee: units(t.Fee),
 		CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
-		Equity: equityOf(t.Equity),
+		Equity:         equityOf(t.Equity),
+		SettlementRail: t.SettlementRail, Legs: legsOf(t.Legs),
 	}
 	r.Recipient.Institution = t.Bank.Institution
 	r.Recipient.AccountIdentifier = t.Bank.AccountNumber
@@ -128,8 +152,15 @@ func merchantView(t transactions.Transaction) merchantOrderResponse {
 		r.Recipient.Memo = "Reversed: " + strings.ReplaceAll(t.Reason, "_", " ")
 	}
 
-	switch t.Kind {
-	case transactions.KindTap:
+	switch {
+	case t.Kind == transactions.KindTap && t.SettlementRail == transactions.RailFintava:
+		// Paid in naira out of the cardholder's wallet: no token was sold,
+		// and the figure the app derives is the fiat itself at par. The
+		// rail's reference stands where a transaction hash would.
+		r.Token, r.Network = string(t.Owed.Currency()), "bank"
+		r.Amount, r.Rate = units(t.Owed), "1"
+		r.TxHash = t.RailRef
+	case t.Kind == transactions.KindTap:
 		// The app shows amount × rate as the fiat figure, so amount is the
 		// USDC sold and rate is fiat per USDC -- exactly what the on-chain
 		// order carried. A tap not yet priced shows the estimate.

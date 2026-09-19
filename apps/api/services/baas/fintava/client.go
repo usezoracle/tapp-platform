@@ -277,6 +277,29 @@ func (c *Client) MerchantTransfer(ctx context.Context, customerReference string,
 	return &out, nil
 }
 
+// CustomerTransfer pays a bank account from a CUSTOMER wallet rather than
+// the merchant wallet: POST /bank/credit with sourceId naming the customer.
+//
+// This is how a cardholder's own naira, in their STATIC_FUND deposit
+// wallet, pays a merchant. The Zerocard backbone (integrations/fintava)
+// sends the same body with sourceId as the customer id.
+func (c *Client) CustomerTransfer(ctx context.Context, sourceID, customerReference string, amount decimal.Decimal, accountNumber, accountName, sortCode, narration string) (*TransferResult, error) {
+	body := map[string]any{
+		"sourceId":          sourceID,
+		"amount":            amount,
+		"accountNumber":     accountNumber,
+		"accountName":       accountName,
+		"sortCode":          sortCode,
+		"narration":         narration,
+		"CustomerReference": customerReference,
+	}
+	var out TransferResult
+	if err := c.do(ctx, http.MethodPost, "/bank/credit", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // TransactionByReference looks a transaction up by reference (vendor
 // reference, or our CustomerReference where Fintava indexes it).
 func (c *Client) TransactionByReference(ctx context.Context, ref string) (*TransferResult, error) {

@@ -130,6 +130,11 @@ func main() {
 		go (&settlement.Worker{Pool: storage.Pool, Rail: baas.Default()}).
 			Run(context.Background(), settlementInterval())
 
+		// The naira leg of a tap: what the cardholder paid from a naira
+		// balance has no USDC to sell, and is paid to the merchant out of
+		// the cardholder's own wallet at the bank rail.
+		go apiv1.SharedNairaWorker().Run(context.Background(), apiv1.NairaSettlementInterval())
+
 		// Tell the equity market about each tap, from the outbox the tap's
 		// own transaction wrote to. Nothing without a market.
 		if c := apiv1.SharedEquity(); c.Enabled() {

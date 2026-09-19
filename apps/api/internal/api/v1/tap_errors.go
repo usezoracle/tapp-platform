@@ -11,6 +11,7 @@ import (
 	"github.com/usezoracle/tapp/api/internal/card/tap"
 	"github.com/usezoracle/tapp/api/internal/ledger/movements"
 	"github.com/usezoracle/tapp/api/internal/money"
+	"github.com/usezoracle/tapp/api/internal/settlement/naira"
 	u "github.com/usezoracle/tapp/api/utils"
 	"github.com/usezoracle/tapp/api/utils/logger"
 )
@@ -25,14 +26,30 @@ import (
 // Codes are stable strings, because the merchant app branches on them to
 // decide whether to show a PIN pad, a QR, or "try another card".
 func writeTapError(ctx *gin.Context, err error) {
-	type mapping struct {
-		target error
-		status int
-		code   string
-		msg    string
+	if m, ok := tapRefusal(err); ok {
+		// The detail goes in the log, not the response: "₦8,000 available,
+		// ₦12,000 needed" tells the merchant the cardholder's balance.
+		logger.Errorf("tap refused (%s): %v", m.code, err)
+		u.APIResponse(ctx, m.status, "error", m.msg, map[string]any{"code": m.code})
+		return
 	}
 
-	for _, m := range []mapping{
+	logger.Errorf("tap failed: %v", err)
+	u.APIResponse(ctx, http.StatusInternalServerError, "error",
+		"Something went wrong. The card has not been charged.", nil)
+}
+
+// tapRefusalMapping is one refusal the merchant app can act on.
+type tapRefusalMapping struct {
+	target error
+	status int
+	code   string
+	msg    string
+}
+
+// tapRefusal finds the mapping for a refusal, if err is one.
+func tapRefusal(err error) (tapRefusalMapping, bool) {
+	for _, m := range []tapRefusalMapping{
 		{tap.ErrCardUnknown, http.StatusNotFound, "card_unrecognized",
 			"This card is not recognised."},
 		{tap.ErrCardUnavailable, http.StatusConflict, "card_unavailable",
@@ -63,19 +80,28 @@ func writeTapError(ctx *gin.Context, err error) {
 			"No such payment."},
 		{tap.ErrRepeatTap, http.StatusConflict, "tap_repeated",
 			"This card was already charged this amount here a moment ago. If this is a separate payment, lift the card off the phone, wait a few seconds, and tap again."},
+		// The merchant's problem, not the card's: what a tap takes from a
+		// naira balance is paid to their bank straight from the cardholder's
+		// wallet, and they have not given a bank account that was verified.
+		// The card is not charged.
+		{naira.ErrNoBankAccount, http.StatusConflict, "merchant_bank_account_required",
+			"Add and verify a bank account before taking payments from naira balances."},
+		// The cardholder's naira has no wallet at the rail behind it, so
+		// there is nothing to pay the merchant from. The card is not charged.
+		{naira.ErrNoWallet, http.StatusConflict, "cardholder_wallet_required",
+			"This card's naira balance has no bank wallet to pay from. The cardholder must open a naira account in their app."},
 	} {
 		if errors.Is(err, m.target) {
-			// The detail goes in the log, not the response: "₦8,000 available,
-			// ₦12,000 needed" tells the merchant the cardholder's balance.
-			logger.Errorf("tap refused (%s): %v", m.code, err)
-			u.APIResponse(ctx, m.status, "error", m.msg, map[string]any{"code": m.code})
-			return
+			return m, true
 		}
 	}
+	return tapRefusalMapping{}, false
+}
 
-	logger.Errorf("tap failed: %v", err)
-	u.APIResponse(ctx, http.StatusInternalServerError, "error",
-		"Something went wrong. The card has not been charged.", nil)
+// tapErrorCode is the stable code a refusal is reported under.
+func tapErrorCode(err error) (string, bool) {
+	m, ok := tapRefusal(err)
+	return m.code, ok
 }
 
 // parseCardAndAmount validates the two fields every card request carries.

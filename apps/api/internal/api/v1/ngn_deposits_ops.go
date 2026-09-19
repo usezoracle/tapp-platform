@@ -11,9 +11,10 @@
 //   - Fintava delivers its webhook to one URL, and that URL was another
 //     system's. Credits that landed before forwarding was in place were never
 //     posted. ReconcileNGNDeposit reads the wallet's balance -- STATIC_FUND
-//     wallets hold what they receive until somebody transfers it out, and
-//     nothing in this codebase transfers out of them, so the balance IS the
-//     sum of deposits -- and posts whatever the ledger is short.
+//     wallets hold what they receive until somebody transfers it out -- adds
+//     back what has been paid out of it to merchants for the cardholder's
+//     taps (internal/settlement/naira records every one), and posts whatever
+//     the ledger is short of that.
 //
 // All of it is reached through the admin console (controllers/admin) and
 // audited there; nothing here decides who may call it.
@@ -32,6 +33,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/usezoracle/tapp/api/internal/money"
+	"github.com/usezoracle/tapp/api/internal/settlement/naira"
 	"github.com/usezoracle/tapp/api/services/baas"
 	"github.com/usezoracle/tapp/api/storage"
 	"github.com/usezoracle/tapp/api/utils/logger"
@@ -134,6 +136,10 @@ type NGNReconcileResult struct {
 	AccountNumber string `json:"account_number"`
 	// WalletBalance is what the rail holds for this account right now.
 	WalletBalance money.Amount `json:"wallet_balance"`
+	// PaidOut is what has left the wallet to pay merchants for the
+	// cardholder's taps. The total ever deposited is WalletBalance plus
+	// this.
+	PaidOut money.Amount `json:"paid_out"`
 	// CreditedBefore is what the ledger had already posted to the owner from
 	// this rail, before this run.
 	CreditedBefore money.Amount `json:"credited_before"`
@@ -149,18 +155,20 @@ type NGNReconcileResult struct {
 	WalletID string `json:"wallet_id"`
 }
 
-// ReconcileNGNDeposit brings the ledger up to what the rail's wallet holds.
+// ReconcileNGNDeposit brings the ledger up to what the rail's wallet has
+// received.
 //
-// The wallet balance is the total ever deposited: STATIC_FUND wallets keep
-// funds until transferred out, and nothing here transfers out of them. So the
-// shortfall against what the ledger has credited from this rail is exactly
-// the set of credits whose webhook never arrived, and it is posted as one
-// deposit with a reference that names the account, the balance it was read
-// at, and the day. Running it again finds no shortfall and posts nothing; two
-// runs racing on the same day present the same reference and the ledger
-// refuses the second.
+// The total ever deposited is the wallet's balance plus what has been paid
+// out of it: STATIC_FUND wallets keep funds until transferred out, and the
+// naira leg of a tap is the one path that transfers out, recording each one.
+// So the shortfall of that total against what the ledger has credited from
+// this rail is exactly the set of credits whose webhook never arrived, and it
+// is posted as one deposit with a reference that names the account, the
+// total it was computed from, and the day. Running it again finds no
+// shortfall and posts nothing; two runs racing on the same day present the
+// same reference and the ledger refuses the second.
 //
-// A balance below what was credited is reported, not corrected: it means
+// A total below what was credited is reported, not corrected: it means
 // money left the wallet by a path this system does not know about, and that
 // is a question for a person, not a debit.
 func ReconcileNGNDeposit(ctx context.Context, rail baas.Provider, accountNumber string) (*NGNReconcileResult, error) {
@@ -176,7 +184,7 @@ func ReconcileNGNDeposit(ctx context.Context, rail baas.Provider, accountNumber 
 			row.AccountNumber, row.Rail, rail.Name())
 	}
 
-	walletID, err := ensureWalletID(ctx, rail, row)
+	walletID, err := ensureRailIDs(ctx, rail, row)
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +198,15 @@ func ReconcileNGNDeposit(ctx context.Context, rail baas.Provider, accountNumber 
 		return nil, err
 	}
 
+	paidOut, err := naira.PaidFromWallet(ctx, storage.Pool, row.AccountNumber)
+	if err != nil {
+		return nil, err
+	}
+	deposited, err := balance.Add(paidOut)
+	if err != nil {
+		return nil, err
+	}
+
 	credited, err := creditedFromRail(ctx, row.UserID, row.Rail)
 	if err != nil {
 		return nil, err
@@ -198,11 +215,12 @@ func ReconcileNGNDeposit(ctx context.Context, rail baas.Provider, accountNumber 
 	res := &NGNReconcileResult{
 		AccountNumber:  row.AccountNumber,
 		WalletBalance:  balance,
+		PaidOut:        paidOut,
 		CreditedBefore: credited,
 		Posted:         money.Zero(money.NGN),
 		WalletID:       walletID,
 	}
-	shortfall, err := balance.Sub(credited)
+	shortfall, err := deposited.Sub(credited)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +235,7 @@ func ReconcileNGNDeposit(ctx context.Context, rail baas.Provider, accountNumber 
 	}
 
 	reference := fmt.Sprintf("reconcile:%s:%d:%s",
-		row.AccountNumber, balance.Minor(), time.Now().UTC().Format("2006-01-02"))
+		row.AccountNumber, deposited.Minor(), time.Now().UTC().Format("2006-01-02"))
 	posted, err := postNGNDeposit(ctx, row.UserID, row.AccountNumber, shortfall, row.Rail, reference)
 	if err != nil {
 		return nil, err
@@ -231,32 +249,60 @@ func ReconcileNGNDeposit(ctx context.Context, rail baas.Provider, accountNumber 
 	return res, nil
 }
 
-// ensureWalletID returns the handle the rail reads balances with, finding
-// and recording it for rows opened before it was stored.
-func ensureWalletID(ctx context.Context, rail baas.Provider, row *NGNAccountRow) (string, error) {
-	if row.WalletID != "" {
+// ensureRailIDs returns the handle the rail reads balances with, finding and
+// recording it -- and the customer id a transfer is sourced from, when that
+// is missing too -- for rows opened before either was stored.
+//
+// The customer id is what the naira leg of a tap debits the wallet by
+// (internal/settlement/naira); a row without one refuses such taps until this
+// has run.
+func ensureRailIDs(ctx context.Context, rail baas.Provider, row *NGNAccountRow) (string, error) {
+	if row.WalletID != "" && row.RailRef != "" {
 		return row.WalletID, nil
-	}
-	locator, ok := rail.(baas.WalletLocator)
-	if !ok {
-		return "", fmt.Errorf("ngn deposits: account %s has no wallet id recorded and rail %s cannot look one up",
-			row.AccountNumber, rail.Name())
 	}
 	if row.Email == "" {
 		return "", fmt.Errorf("ngn deposits: account %s has no wallet id and its owner has no email to search by",
 			row.AccountNumber)
 	}
-	walletID, err := locator.LocateWallet(ctx, row.Email, row.AccountNumber)
-	if err != nil {
-		return "", fmt.Errorf("ngn deposits: locate wallet for %s: %w", row.AccountNumber, err)
+
+	var customerID, walletID string
+	switch locator := rail.(type) {
+	case baas.CustomerLocator:
+		var err error
+		customerID, walletID, err = locator.LocateCustomer(ctx, row.Email, row.AccountNumber)
+		if err != nil {
+			return "", fmt.Errorf("ngn deposits: locate wallet for %s: %w", row.AccountNumber, err)
+		}
+	case baas.WalletLocator:
+		var err error
+		walletID, err = locator.LocateWallet(ctx, row.Email, row.AccountNumber)
+		if err != nil {
+			return "", fmt.Errorf("ngn deposits: locate wallet for %s: %w", row.AccountNumber, err)
+		}
+	default:
+		return "", fmt.Errorf("ngn deposits: account %s has no wallet id recorded and rail %s cannot look one up",
+			row.AccountNumber, rail.Name())
 	}
-	if _, err := storage.Pool.Exec(ctx,
-		`UPDATE ngn_deposit_accounts SET wallet_id = $2 WHERE account_number = $1 AND wallet_id = ''`,
-		row.AccountNumber, walletID); err != nil {
-		return "", fmt.Errorf("ngn deposits: record wallet id for %s: %w", row.AccountNumber, err)
+	if row.WalletID != "" {
+		walletID = row.WalletID
 	}
-	logger.Infof("ngn deposits: recorded wallet %s for account %s", walletID, row.AccountNumber)
-	row.WalletID = walletID
+	if row.RailRef != "" {
+		customerID = row.RailRef
+	}
+	if walletID == "" {
+		return "", fmt.Errorf("ngn deposits: rail %s found no wallet id for %s", rail.Name(), row.AccountNumber)
+	}
+
+	if _, err := storage.Pool.Exec(ctx, `
+		UPDATE ngn_deposit_accounts
+		   SET wallet_id = CASE WHEN wallet_id = '' THEN $2 ELSE wallet_id END,
+		       rail_ref  = CASE WHEN rail_ref  = '' THEN $3 ELSE rail_ref  END
+		 WHERE account_number = $1`,
+		row.AccountNumber, walletID, customerID); err != nil {
+		return "", fmt.Errorf("ngn deposits: record rail ids for %s: %w", row.AccountNumber, err)
+	}
+	logger.Infof("ngn deposits: recorded wallet %s (customer %q) for account %s", walletID, customerID, row.AccountNumber)
+	row.WalletID, row.RailRef = walletID, customerID
 	return walletID, nil
 }
 
