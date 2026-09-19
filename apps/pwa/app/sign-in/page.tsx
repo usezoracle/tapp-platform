@@ -301,8 +301,6 @@ function SignInBody() {
             </button>
           )}
         </p>
-
-        <p className="text-xs text-fg-subtle">Base mainnet · non-custodial · encrypted.</p>
       </AnimatedComponent>
     </Screen>
   );
