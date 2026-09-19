@@ -57,7 +57,7 @@ const retry = (count: number, err: unknown) => !isFeatureDisabled(err) && count 
 
 /** States that are on their way to becoming stocks. */
 export const isInFlight = (state: EquityState) =>
-  state === "queued" || state === "pending" || state === "escrowed";
+  state === "held" || state === "queued" || state === "pending" || state === "escrowed";
 
 // -----------------------------------------------------------------------------
 // Hooks

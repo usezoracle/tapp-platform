@@ -91,7 +91,9 @@ export type FeedItem =
   | { kind: "equity"; at: string; item: EquityActivityItem };
 
 /** The states that are an event. Queued has not started; failed says nothing (the tap still went through). */
-const ROW_STATES = new Set(["allocated", "pending", "escrowed", "reversed"]);
+// Stock is issued only once the merchant has been paid; until then the tap's
+// stock is "held". A cancelled row (reversed before payout) never happened.
+const ROW_STATES = new Set(["held", "queued", "allocated", "pending", "escrowed", "reversed"]);
 
 /** Movements and buybacks in one list, newest first. */
 export function mergeFeed(
@@ -324,7 +326,8 @@ function MovementRow({
 function EquityRow({ item, when: whenText }: { item: EquityActivityItem; when?: string }) {
   const symbol = item.symbol ?? item.merchant?.symbol ?? null;
   const n = formatShares(item.bought.shares, BRIEF_DECIMALS);
-  const pending = item.state === "pending" || item.state === "escrowed";
+  const awaiting = item.state === "held" || item.state === "queued";
+  const pending = awaiting || item.state === "pending" || item.state === "escrowed";
   const returned = item.state === "reversed";
 
   const what = symbol ? `${symbol} stock` : "Stock";
@@ -342,7 +345,7 @@ function EquityRow({ item, when: whenText }: { item: EquityActivityItem; when?: 
       <span className="grid min-w-0 flex-1 gap-0.5">
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm font-medium text-fg">{title}</span>
-          {pending ? <StatusChip tone="pending">pending</StatusChip> : null}
+          {pending ? <StatusChip tone="pending">{awaiting ? "awaiting settlement" : "pending"}</StatusChip> : null}
         </span>
         {/* A whole sentence; on a phone it takes two lines rather than
             losing the tap to an ellipsis. */}

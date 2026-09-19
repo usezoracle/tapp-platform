@@ -75,6 +75,8 @@ export interface HoldingDetail extends Holding {
 }
 
 export type EquityState =
+  | "held"
+  | "cancelled"
   | "queued"
   | "failed"
   | "escrowed"
