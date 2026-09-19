@@ -31,10 +31,10 @@ export function SideRail() {
       {/* The brand, alone at the top; who is signed in lives at the foot. */}
       <Link
         href="/"
-        className="focus-ring m-2 flex h-14 items-center rounded-md px-3 hover:bg-hover"
+        className="focus-ring m-2 flex h-16 items-center rounded-md px-3 hover:bg-hover"
         aria-label="Freedom home"
       >
-        <Logo className="h-8" />
+        <Logo className="h-11" />
       </Link>
 
       <nav className="mt-2 grid gap-px px-2">
