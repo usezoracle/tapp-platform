@@ -326,7 +326,7 @@ func TestAQueuedSettlementIsPaidOnce(t *testing.T) {
 
 	s := f.row(t, tap)
 	if s.State != Queued || s.Reference != "tap-"+tap.String()+"-ngn" || s.AccountName != "OLUMIDE SILAS OGUNDELE" ||
-		s.SourceCustomerID != "cust-"+s.CardholderID.String()[:8] || s.SourceAccountNumber == "" {
+		s.SourceWalletID != "wal-cust-"+s.CardholderID.String()[:8] || s.SourceAccountNumber == "" {
 		t.Fatalf("recorded row = %+v", s)
 	}
 	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); got.Minor() != owed.Minor() {
@@ -341,7 +341,7 @@ func TestAQueuedSettlementIsPaidOnce(t *testing.T) {
 		t.Fatalf("transfers = %+v, want one", f.Rail.transfers)
 	}
 	sent := f.Rail.transfers[0]
-	if sent.PaymentReference != s.Reference || sent.SourceID != s.SourceCustomerID ||
+	if sent.PaymentReference != s.Reference || sent.SourceID != s.SourceWalletID ||
 		sent.BeneficiaryAccount != "9034409271" || sent.BeneficiaryBankCode != "090325" ||
 		sent.BeneficiaryName != "OLUMIDE SILAS OGUNDELE" || sent.Narration != "Tapp: Mama Put" {
 		t.Fatalf("rail was asked %+v; want the tap's reference, from the cardholder's wallet, to the merchant's verified bank", sent)

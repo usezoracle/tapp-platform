@@ -40,7 +40,7 @@ type ngnSettlementView struct {
 	CardholderID string `json:"cardholder_id"`
 	MerchantID   string `json:"merchant_id"`
 	// The cardholder's wallet the leg is paid from.
-	SourceCustomerID    string `json:"source_customer_id"`
+	SourceWalletID    string `json:"source_wallet_id"`
 	SourceAccountNumber string `json:"source_account_number"`
 	Currency            string `json:"currency"`
 	Amount              string `json:"amount"`
@@ -66,7 +66,7 @@ type ngnSettlementView struct {
 func ngnSettlementOf(s *naira.Settlement) ngnSettlementView {
 	v := ngnSettlementView{
 		TapID: s.TapID.String(), CardholderID: s.CardholderID.String(), MerchantID: s.MerchantID.String(),
-		SourceCustomerID: s.SourceCustomerID, SourceAccountNumber: s.SourceAccountNumber,
+		SourceWalletID: s.SourceWalletID, SourceAccountNumber: s.SourceAccountNumber,
 		Currency: string(s.Amount.Currency()), Amount: plain(s.Amount),
 		Bank:            bankView{Institution: s.BankCode, AccountNumber: s.AccountNumber, AccountName: s.AccountName},
 		FintavaBankCode: s.FintavaBankCode,

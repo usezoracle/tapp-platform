@@ -120,11 +120,14 @@ func Record(ctx context.Context, tx pgx.Tx, tapID, cardholder, merchant uuid.UUI
 		return ErrNoWallet
 	}
 
-	var customerID, sourceAccount string
+	// The wallet's own id is what the rail takes as the source of a
+	// transfer -- not the customer's. A deposit account opened before the
+	// wallet id was recorded has no source to pay from.
+	var walletID, sourceAccount string
 	err := tx.QueryRow(ctx, `
-		SELECT rail_ref, account_number FROM ngn_deposit_accounts
-		 WHERE user_id = $1 AND rail = $2`, cardholder, rail).Scan(&customerID, &sourceAccount)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && customerID == "") {
+		SELECT COALESCE(wallet_id, ''), account_number FROM ngn_deposit_accounts
+		 WHERE user_id = $1 AND rail = $2`, cardholder, rail).Scan(&walletID, &sourceAccount)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && walletID == "") {
 		return ErrNoWallet
 	}
 	if err != nil {
@@ -150,11 +153,11 @@ func Record(ctx context.Context, tx pgx.Tx, tapID, cardholder, merchant uuid.UUI
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO card_tap_ngn_settlements
-			(tap_id, cardholder_id, merchant_id, source_customer_id, source_account_number,
+			(tap_id, cardholder_id, merchant_id, source_wallet_id, source_account_number,
 			 currency, amount_minor, bank_code, account_number, account_name, reference)
 		VALUES ($1, $2, $3, $4, $5, $6::currency, $7, $8, $9, $10, $11)
 		ON CONFLICT (tap_id) DO NOTHING`,
-		tapID, cardholder, merchant, customerID, sourceAccount,
+		tapID, cardholder, merchant, walletID, sourceAccount,
 		string(owed.Currency()), owed.Minor(), bankCode, accountNumber, accountName, Reference(tapID))
 	if err != nil {
 		return fmt.Errorf("naira: record settlement: %w", err)
@@ -167,9 +170,10 @@ type Settlement struct {
 	TapID        uuid.UUID
 	CardholderID uuid.UUID
 	MerchantID   uuid.UUID
-	// SourceCustomerID and SourceAccountNumber name the cardholder's wallet
-	// the leg is paid from.
-	SourceCustomerID    string
+	// SourceWalletID and SourceAccountNumber name the cardholder's wallet
+	// the leg is paid from; the rail's transfer takes the wallet id as
+	// its source.
+	SourceWalletID      string
 	SourceAccountNumber string
 	Amount              money.Amount
 
@@ -195,7 +199,7 @@ type Settlement struct {
 }
 
 const settlementSelect = `
-	SELECT tap_id, cardholder_id, merchant_id, source_customer_id, source_account_number,
+	SELECT tap_id, cardholder_id, merchant_id, source_wallet_id, source_account_number,
 	       currency::text, amount_minor,
 	       bank_code, coalesce(fintava_bank_code, ''), account_number, account_name,
 	       reference, state, attempts, coalesce(rail_ref, ''), coalesce(error, ''),
@@ -208,7 +212,7 @@ func scanSettlement(row pgx.Row) (*Settlement, error) {
 		cur   string
 		minor int64
 	)
-	if err := row.Scan(&s.TapID, &s.CardholderID, &s.MerchantID, &s.SourceCustomerID, &s.SourceAccountNumber,
+	if err := row.Scan(&s.TapID, &s.CardholderID, &s.MerchantID, &s.SourceWalletID, &s.SourceAccountNumber,
 		&cur, &minor,
 		&s.BankCode, &s.FintavaBankCode, &s.AccountNumber, &s.AccountName,
 		&s.Reference, &s.State, &s.Attempts, &s.RailRef, &s.Error,

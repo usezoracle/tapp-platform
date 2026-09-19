@@ -234,7 +234,7 @@ func (w *Worker) submit(ctx context.Context, s *Settlement) error {
 	}
 
 	transfer, err := w.Rail.(baas.WalletTransferer).TransferFromWallet(ctx, baas.WalletTransferRequest{
-		SourceID:            s.SourceCustomerID,
+		SourceID:            s.SourceWalletID,
 		BeneficiaryBankCode: s.FintavaBankCode,
 		BeneficiaryAccount:  s.AccountNumber,
 		BeneficiaryName:     s.AccountName,
@@ -266,8 +266,13 @@ func (w *Worker) narration(ctx context.Context, merchant uuid.UUID) string {
 // the chase asks the rail what happened. Neither is retried here.
 func (w *Worker) recordError(ctx context.Context, s *Settlement, err error) error {
 	if baas.IsRefusal(err) {
+		slog.Warn("naira: the rail refused the transfer", "tap", s.TapID, "err", err)
 		return w.fail(ctx, s, err.Error())
 	}
+	// Logged in full: the row keeps it too, but the chase may replace it
+	// later, and the rail's exact words are what an operator debugs from.
+	slog.Error("naira: the rail did not answer the transfer; chasing", "tap", s.TapID, "err", err)
+	s.Error = err.Error()
 	_, e := w.Pool.Exec(ctx, `
 		UPDATE card_tap_ngn_settlements SET error = $2, updated_at = now()
 		 WHERE tap_id = $1 AND state = 'submitted'`, s.TapID, err.Error())
@@ -396,7 +401,13 @@ func (w *Worker) chaseStale(ctx context.Context) (int, error) {
 		}
 		switch {
 		case status.Status == baas.TransferPending && status.RawStatus == "not_found" && s.RailRef == "":
-			if err := w.fail(ctx, s, "the rail has no record of this transfer; retry from the console"); err != nil {
+			// The submit's own error, if there was one, is the useful
+			// part of this story; keep it in front of the chase's verdict.
+			why := "the rail has no record of this transfer; retry from the console"
+			if s.Error != "" {
+				why = s.Error + " -- " + why
+			}
+			if err := w.fail(ctx, s, why); err != nil {
 				return chased, err
 			}
 		case status.Status == baas.TransferPending:
