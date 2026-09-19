@@ -60,6 +60,40 @@ importers:
         specifier: ^5
         version: 5.9.3
 
+  apps/landing:
+    dependencies:
+      framer-motion:
+        specifier: ^12.40.0
+        version: 12.43.0(@types/react@19.2.18)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      next:
+        specifier: 16.2.6
+        version: 16.2.6(@babel/core@7.29.7(supports-color@8.1.1))(@types/react@19.2.18)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      react:
+        specifier: 19.2.4
+        version: 19.2.4
+      react-dom:
+        specifier: 19.2.4
+        version: 19.2.4(react@19.2.4)
+    devDependencies:
+      '@tailwindcss/postcss':
+        specifier: ^4
+        version: 4.3.3
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
+      '@types/react':
+        specifier: ^19
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19
+        version: 19.2.7(@types/react@19.2.18)
+      tailwindcss:
+        specifier: ^4
+        version: 4.3.3
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+
   apps/merchant:
     dependencies:
       '@expo-google-fonts/bricolage-grotesque':

@@ -1,0 +1,217 @@
+@import "tailwindcss";
+
+/*
+ * Freedom landing -- design tokens.
+ *
+ * Two grounds (white / near-black #0f0f10), one accent (the brand red), and
+ * a hairline. Everything else is a grey between the two grounds. Tokens live
+ * on :root and flip with the OS colour scheme; `.scope-dark` re-declares the
+ * dark set so the "For businesses" section can be dark regardless of theme.
+ * `@theme inline` exposes them as Tailwind utilities (bg-ground, text-fg, ...).
+ */
+
+:root {
+  --ground:      #ffffff;
+  --tile:        #f6f6f7;
+  --fg:          #0f0f10;
+  --fg-muted:    #6b6b70;
+  --fg-subtle:   #9a9a9f;
+  --line:        #e6e6e8;
+  --line-strong: #cfcfd3;
+  --accent:      #d7261e;
+  --primary:     #0f0f10;
+  --primary-fg:  #ffffff;
+  --check:       rgba(15, 15, 16, 0.045);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground:      #0f0f10;
+    --tile:        #161618;
+    --fg:          #f4f4f5;
+    --fg-muted:    #9c9ca3;
+    --fg-subtle:   #6c6c73;
+    --line:        #232326;
+    --line-strong: #37373c;
+    --accent:      #ef3b33;
+    --primary:     #ffffff;
+    --primary-fg:  #0f0f10;
+    --check:       rgba(255, 255, 255, 0.05);
+
+    color-scheme: dark;
+  }
+}
+
+/* A section that is dark in both themes. */
+.scope-dark {
+  --ground:      #0f0f10;
+  --tile:        #161618;
+  --fg:          #f4f4f5;
+  --fg-muted:    #9c9ca3;
+  --fg-subtle:   #6c6c73;
+  --line:        #232326;
+  --line-strong: #37373c;
+  --accent:      #ef3b33;
+  --primary:     #ffffff;
+  --primary-fg:  #0f0f10;
+  --check:       rgba(255, 255, 255, 0.05);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-ground:      var(--ground);
+  --color-tile:        var(--tile);
+  --color-fg:          var(--fg);
+  --color-fg-muted:    var(--fg-muted);
+  --color-fg-subtle:   var(--fg-subtle);
+  --color-line:        var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent:      var(--accent);
+  --color-primary:     var(--primary);
+  --color-primary-fg:  var(--primary-fg);
+}
+
+@theme {
+  --font-sans:
+    var(--font-inter, system-ui), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display:
+    var(--font-bricolage, var(--font-inter, system-ui)), -apple-system, sans-serif;
+  --font-mono:
+    var(--font-jetbrains, ui-monospace), "SF Mono", Menlo, Consolas, monospace;
+
+  /* Radii: 6 / 8 / 10. Nothing rounder except pills and the cards. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 10px;
+  --radius-2xl: 10px;
+  --radius-3xl: 10px;
+
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+html,
+body {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  background: var(--ground);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+  overflow-x: clip;
+}
+
+::selection {
+  background: var(--accent);
+  color: #ffffff;
+}
+
+/* Display type: Bricolage, tight tracking, tabular figures. */
+.display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+.num {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Mono eyebrow with a small square marker: the checker cue at type size. */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.eyebrow::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  flex: none;
+}
+
+/*
+ * The checker: the card's motif at low contrast, rotated like the card art.
+ * Hard-edged squares only -- never a soft gradient. The mask only fades the
+ * pattern out at the edges so it never fights the type.
+ */
+.checker {
+  position: absolute;
+  inset: -30%;
+  pointer-events: none;
+  background-image: repeating-conic-gradient(var(--check) 0 25%, transparent 0 50%);
+  background-size: 64px 64px;
+  transform: rotate(-15deg);
+  mask-image: radial-gradient(ellipse 55% 55% at 50% 50%, #000 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 55% 55% at 50% 50%, #000 30%, transparent 100%);
+}
+
+/* Hairline containers. */
+.hairline {
+  border: 1px solid var(--line);
+}
+
+/* FAQ disclosure: hide the native marker, rotate ours. */
+details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+details[open] .faq-plus {
+  transform: rotate(45deg);
+}
+
+/* Card mockups: real proportions, the short side sets the corner radius. */
+.card-3d {
+  position: relative;
+  border-radius: calc(var(--short) * 0.059);
+  overflow: hidden;
+  background: #0f0f10;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+.card-3d img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.card-3d::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
