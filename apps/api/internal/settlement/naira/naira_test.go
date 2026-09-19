@@ -3,6 +3,7 @@ package naira
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/shopspring/decimal"
 
 	"github.com/usezoracle/tapp/api/internal/ledger"
 	"github.com/usezoracle/tapp/api/internal/ledger/movements"
@@ -86,6 +88,9 @@ type fakeRail struct {
 	message     string
 	transferErr error
 	chase       *baas.Transfer
+	// held is the wallet balance GetAccount reports; nil means the rail
+	// cannot say, which must not stop a payment.
+	held *decimal.Decimal
 
 	transfers []baas.WalletTransferRequest
 }
@@ -135,7 +140,12 @@ func (f *fakeRail) ListBanks(context.Context) ([]baas.Bank, error) {
 	return f.banks, nil
 }
 func (f *fakeRail) ListAccounts(context.Context, bool) ([]baas.Account, error) { return nil, nil }
-func (f *fakeRail) GetAccount(context.Context, string) (*baas.Account, error)  { return nil, nil }
+func (f *fakeRail) GetAccount(_ context.Context, id string) (*baas.Account, error) {
+	if f.held == nil {
+		return nil, nil
+	}
+	return &baas.Account{ID: id, Balance: *f.held, Currency: "NGN"}, nil
+}
 func (f *fakeRail) InitiateIdentity(context.Context, baas.IdentityInit) (*baas.IdentityResult, error) {
 	return nil, nil
 }
@@ -479,6 +489,53 @@ func TestARefusedSettlementStaysFailedUntilRetried(t *testing.T) {
 	}
 	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); !got.IsZero() {
 		t.Errorf("merchant owed %s after the retry settled", got)
+	}
+}
+
+// A wallet that cannot cover the leg is refused before the rail is asked,
+// with both figures in the message: the rail answers a short wallet with a
+// bare 500 that says nothing. What the wallet held is also written next to
+// any error the rail does give, since its transfer fee is only known once
+// charged, and a wallet holding the leg but not the fee fails the same way.
+func TestAShortWalletIsRefusedBeforeTheRailIsAsked(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	merchant := uuid.New()
+	f.verifiedBank(t, merchant)
+	tap, owed := f.nairaTap(t, merchant)
+	short := decimalOf(owed).Sub(decimal.NewFromInt(1))
+	f.Rail.held = &short
+
+	if paid, _, err := f.Worker.Tick(ctx); err != nil || paid != 0 {
+		t.Fatalf("Tick: paid=%d err=%v", paid, err)
+	}
+	s := f.row(t, tap)
+	want := fmt.Sprintf("the wallet holds ₦%s; the leg is %s", short.StringFixed(2), owed)
+	if s.State != Failed || s.Error != want {
+		t.Fatalf("row = %+v, want failed with %q", s, want)
+	}
+	if f.Rail.sent() != 0 {
+		t.Fatalf("the rail was asked %d times for a leg the wallet cannot cover", f.Rail.sent())
+	}
+	if got := f.balance(t, ledger.Merchant(merchant), ledger.KindMerchantPayable); got.Minor() != owed.Minor() {
+		t.Errorf("merchant owed %s, want %s still owed", got, owed)
+	}
+
+	// Enough for the leg, but the rail throws (its fee, say): the row keeps
+	// the rail's words and what the wallet held beside them.
+	enough := decimalOf(owed)
+	f.Rail.held = &enough
+	f.Rail.transferErr = errors.New("fintava: http 500: An unexpected error occurred")
+	if _, err := f.Worker.Retry(ctx, tap); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.Worker.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s = f.row(t, tap)
+	want = fmt.Sprintf("fintava: http 500: An unexpected error occurred (the wallet held ₦%s for a %s leg)", enough.StringFixed(2), owed)
+	if s.State != Submitted || s.Error != want {
+		t.Fatalf("row = %+v, want submitted with %q", s, want)
 	}
 }
 

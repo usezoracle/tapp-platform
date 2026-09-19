@@ -233,6 +233,25 @@ func (w *Worker) submit(ctx context.Context, s *Settlement) error {
 			"the account now belongs to %q, not %q", enquiry.AccountName, s.AccountName))
 	}
 
+	// What the wallet holds, read before anything is sent. A leg the wallet
+	// cannot cover is refused here with the two figures in the message,
+	// rather than sent to a rail that answers a short wallet with a bare
+	// 500. The rail's own transfer fee is not known until it has charged
+	// it, so a wallet holding the leg but not the fee still reaches the
+	// rail; its answer is then annotated with the balance, so the shortfall
+	// can be read off the row. A balance that cannot be read is not a
+	// reason to hold the payment.
+	held := "unknown"
+	if acct, err := w.Rail.GetAccount(ctx, s.SourceWalletID); err != nil {
+		slog.Warn("naira: could not read wallet balance before paying", "tap", s.TapID, "err", err)
+	} else if acct != nil {
+		held = "₦" + acct.Balance.StringFixed(2)
+		if acct.Balance.LessThan(decimalOf(s.Amount)) {
+			return w.fail(ctx, s, fmt.Sprintf(
+				"the wallet holds %s; the leg is %s", held, s.Amount.String()))
+		}
+	}
+
 	transfer, err := w.Rail.(baas.WalletTransferer).TransferFromWallet(ctx, baas.WalletTransferRequest{
 		SourceID:            s.SourceWalletID,
 		BeneficiaryBankCode: s.FintavaBankCode,
@@ -243,7 +262,7 @@ func (w *Worker) submit(ctx context.Context, s *Settlement) error {
 		PaymentReference:    s.Reference,
 	})
 	if err != nil {
-		return w.recordError(ctx, s, err)
+		return w.recordError(ctx, s, fmt.Errorf("%w (the wallet held %s for a %s leg)", err, held, s.Amount.String()))
 	}
 	return w.apply(ctx, s, transfer.Reference, transfer.Status, transfer.Message)
 }

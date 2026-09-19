@@ -229,7 +229,7 @@ func IsRefusal(err error) bool {
 // TransferRequest.
 type WalletTransferRequest struct {
 	// SourceID is the rail's handle for the wallet being debited. For
-	// Fintava it is the customer id the wallet was opened under.
+	// Fintava it is the wallet's own id, as its /bank/credit takes.
 	SourceID            string
 	BeneficiaryBankCode string
 	BeneficiaryAccount  string
