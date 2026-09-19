@@ -229,14 +229,46 @@ type NameEnquiryResult struct {
 	BankName      string `json:"bankName"`
 }
 
+// nameEnquiryPayload is what the live endpoint actually answers:
+//
+//	{"data": {"status": true, "account": {"bankCode": "090405",
+//	  "accountName": "…", "accountNumber": "…", "responseCode": "00"}}}
+//
+// The flat shape is kept for the older responses. An enquiry that decodes
+// to no name is refused by the caller, which is right — but it must not be
+// refused because the name was in a field nobody read.
+type nameEnquiryPayload struct {
+	NameEnquiryResult
+	Status  *bool `json:"status"`
+	Account struct {
+		AccountName   string `json:"accountName"`
+		AccountNumber string `json:"accountNumber"`
+		BankCode      string `json:"bankCode"`
+		BankName      string `json:"bankName"`
+		ResponseCode  string `json:"responseCode"`
+	} `json:"account"`
+}
+
 // NameEnquiry resolves the account name behind number+sortCode.
 func (c *Client) NameEnquiry(ctx context.Context, accountNumber, sortCode string) (*NameEnquiryResult, error) {
 	q := url.Values{"accountNumber": {accountNumber}, "sortCode": {sortCode}}
-	var out NameEnquiryResult
+	var out nameEnquiryPayload
 	if err := c.do(ctx, http.MethodGet, "/name/enquiry?"+q.Encode(), nil, &out); err != nil {
 		return nil, err
 	}
-	return &out, nil
+	r := out.NameEnquiryResult
+	if r.AccountName == "" && out.Account.AccountName != "" {
+		r = NameEnquiryResult{
+			AccountName:   out.Account.AccountName,
+			AccountNumber: firstNonEmpty(out.Account.AccountNumber, accountNumber),
+			SortCode:      firstNonEmpty(out.Account.BankCode, sortCode),
+			BankName:      out.Account.BankName,
+		}
+	}
+	if r.AccountName == "" {
+		return nil, fmt.Errorf("fintava: name enquiry for %s/%s answered without an account name", accountNumber, sortCode)
+	}
+	return &r, nil
 }
 
 // TransferResult is the tolerant decode of transfer submit/status
