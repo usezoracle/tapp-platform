@@ -28,16 +28,13 @@ export function SideRail() {
       aria-label="Primary"
       className="fixed inset-y-0 left-0 z-20 hidden w-rail flex-col border-r border-line bg-surface transition-colors md:flex"
     >
-      {/* Workspace row: the mark and who is signed in. */}
+      {/* The brand, alone at the top; who is signed in lives at the foot. */}
       <Link
         href="/"
-        className="focus-ring m-2 flex h-11 items-center gap-2.5 rounded-md px-2 hover:bg-hover"
+        className="focus-ring m-2 flex h-14 items-center rounded-md px-3 hover:bg-hover"
+        aria-label="Freedom home"
       >
-        <span className="grid min-w-0 flex-1">
-          <Logo className="h-5" />
-          <span className="truncate text-xs leading-4 text-fg-muted">{session?.email ?? ""}</span>
-        </span>
-        {session ? <Web3Avatar address={session.email} size={20} /> : null}
+        <Logo className="h-8" />
       </Link>
 
       <nav className="mt-2 grid gap-px px-2">
@@ -68,6 +65,12 @@ export function SideRail() {
           <span className="text-xs text-fg-muted">Theme</span>
           <ThemeSwitch />
         </div>
+        {session ? (
+          <div className="flex min-w-0 items-center gap-2.5 px-1 py-1">
+            <Web3Avatar address={session.email} size={24} />
+            <span className="truncate text-xs leading-4 text-fg-muted">{session.email}</span>
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={clear}
