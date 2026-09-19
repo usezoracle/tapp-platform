@@ -55,19 +55,25 @@ const EXACT: Record<string, string> = {
   "fx.sold": "Converted out",
   "fx.bought": "Converted in",
   "fx.spread": "Conversion spread",
-  "deposit.credited": "USDC received",
+  "deposit.credited": "Received",
   "withdrawal.debited": "Withdrawal sent",
   "settlement.refunded_sender": "Refunded",
 };
 
-function describe(reason: string): { icon: ReactNode; label: string } {
+function describe(reason: string, currency?: string): { icon: ReactNode; label: string } {
   // A reason can carry a suffix after a colon -- "handover.released:expired".
   const [base] = reason.split(":");
   const domain = DOMAINS[base.split(".")[0]] ?? {
     icon: <PiReceiptBold />,
     label: base,
   };
-  return { icon: domain.icon, label: EXACT[base] ?? domain.label };
+  let label = EXACT[base] ?? domain.label;
+  // A deposit is named by what arrived: naira from a bank transfer reads
+  // "Naira received", not "USDC received".
+  if (base === "deposit.credited") {
+    label = currency === "NGN" ? "Naira received" : currency ? `${currency} received` : "Received";
+  }
+  return { icon: domain.icon, label };
 }
 
 /**
@@ -264,7 +270,7 @@ function MovementRow({
   /** Overrides the relative "2h ago" -- a grouped list passes the time. */
   when?: string;
 }) {
-  const { icon, label } = describe(movement.reason);
+  const { icon, label } = describe(movement.reason, movement.amount?.currency);
   const incoming = movement.amount.minor > 0;
 
   // A movement into escrow is not income, even though its sign is positive
