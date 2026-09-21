@@ -8,7 +8,7 @@ import { Screen, Section } from "@/components/ui/Screen";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { BalanceHero, BalanceActions, type StatusLine } from "@/components/ui/Balances";
-import { MovementList, mergeFeed, daysAgo } from "@/components/ui/MovementList";
+import { MovementList, mergeFeed } from "@/components/ui/MovementList";
 import { InfoBanner } from "@/components/ui/InfoBanner";
 import { TodayStrip, cardTile, sharesTile, pendingTile, type Tile } from "@/components/ui/TodayStrip";
 import { CardPrompt } from "@/components/ui/CardPrompt";
@@ -26,8 +26,7 @@ import { useBalances, useActivity, useCard } from "@/lib/ledger";
 import { useHoldings, useEquityActivity } from "@/lib/holdings";
 import { formatMinor, type CardSummary } from "@/lib/api";
 
-/** How far back the home looks. The rest is one tap away, on Activity. */
-const RECENT_DAYS = 1;
+/** How many of the latest lines the home shows. The rest is one tap away, on Activity. */
 const RECENT_ROWS = 6;
 
 /**
@@ -39,7 +38,7 @@ const RECENT_ROWS = 6;
  *
  * The order is by weight: what you have (the hero), what it is worth over
  * time (the chart), what today looks like (one strip of figures, the
- * Stocks tile among them), what happened (today and yesterday). Everything
+ * Stocks tile among them), what happened last (the latest few). Everything
  * past that is a section link away: the stocks themselves are one tap off
  * the tile or the Holdings item. The previous layout gave each of these a
  * panel of equal size, and the page was a scroll of similar boxes with the
@@ -60,12 +59,10 @@ export function WalletScreen() {
 
   const movements = activity.data?.movements ?? [];
   // Money and the stock it bought, in one feed; the six most recent of
-  // either kind from today and yesterday.
+  // either kind, however long ago. A wallet used on Friday should show
+  // Friday on Monday, not a line saying nothing happened since.
   const recent = useMemo(
-    () =>
-      mergeFeed(activity.data?.movements ?? [], equity.data?.activity)
-        .filter((f) => daysAgo(f.at) <= RECENT_DAYS)
-        .slice(0, RECENT_ROWS),
+    () => mergeFeed(activity.data?.movements ?? [], equity.data?.activity).slice(0, RECENT_ROWS),
     [activity.data, equity.data],
   );
 
@@ -169,10 +166,6 @@ export function WalletScreen() {
                     <SkeletonRows rows={3} />
                   ) : recent.length ? (
                     <MovementList items={recent} grouped />
-                  ) : movements.length ? (
-                    <p className="text-[13px] leading-5 text-fg-muted">
-                      Nothing today or yesterday.
-                    </p>
                   ) : (
                     <EmptyState title="No activity yet">
                       Add cash through an agent, or receive USDC on Base, and it will show
