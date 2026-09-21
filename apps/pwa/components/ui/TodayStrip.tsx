@@ -97,13 +97,14 @@ export function TodayStrip({ tiles, className }: { tiles: Tile[]; className?: st
           key={t.href}
           href={t.href}
           style={hueStyle(t.hue)}
-          className="focus-ring panel relative grid min-w-0 content-start gap-1 overflow-hidden p-3 transition-colors hover:bg-hover"
+          className="focus-ring panel relative grid min-w-0 content-start gap-1.5 p-3 transition-colors hover:bg-hover"
         >
-          {/* The rule: 3px of the tile's hue along the top edge, inside the
-              hairline so the border stays one pixel everywhere. */}
-          <span aria-hidden className="absolute inset-x-0 top-0 h-[3px] bg-(--hue)" />
-          <span className="flex min-w-0 items-center gap-1.5 text-xs text-fg-muted">
-            <DuotoneIcon name={t.icon} size={16} className="hue-text shrink-0" />
+          {/* The colour lives in the glyph's tile, sized like a glyph, not on
+              the panel: the panel is the same hairline as every other one. */}
+          <span className="flex min-w-0 items-center gap-2 text-xs text-fg-muted">
+            <span className="hue-tint hue-text grid size-6 shrink-0 place-items-center rounded-sm">
+              <DuotoneIcon name={t.icon} size={14} />
+            </span>
             <span className="truncate">{t.label}</span>
           </span>
           <span className="truncate text-sm font-medium tabular-nums text-fg">{t.value}</span>
