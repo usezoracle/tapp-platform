@@ -39,7 +39,8 @@ const isCard = (p: string) =>
  * a thumb can tell apart -- and the Stocks tile on the wallet links to it.
  *
  * The navigation is one colour: every glyph is drawn duotone in `--nav`
- * (the accent), so the rail reads as one instrument rather than six. The
+ * (the ink), so the rail reads as one instrument rather than six; the
+ * active item is ink on an ink wash, the rest are grey. The
  * semantic hues (`--nav-card` violet, `--nav-holdings` green, …) still
  * colour the tiles and rows on the screens themselves, where meaning is
  * what the colour carries.

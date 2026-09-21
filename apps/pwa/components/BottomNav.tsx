@@ -88,7 +88,7 @@ function RegularTab({ tab, pathname }: { tab: Tab; pathname: string }) {
           <DuotoneIcon
             name={tab.icon}
             size={22}
-            className={cn("hue-text relative z-10 transition-opacity", !active && "opacity-70")}
+            className={cn("relative z-10 transition-colors", active ? "hue-text" : "text-fg-muted")}
           />
         </span>
         <span

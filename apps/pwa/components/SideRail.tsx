@@ -55,9 +55,9 @@ export function SideRail() {
                 active ? "hue-tint hue-text" : "text-fg-muted hover:bg-hover hover:text-fg",
               )}
             >
-              {/* The glyph keeps its hue when the item is at rest, at 70%,
-                  and comes to full strength with the tint behind it. */}
-              <DuotoneIcon name={item.icon} size={18} className={cn("hue-text", !active && "opacity-70")} />
+              {/* Active is ink on an ink wash; at rest the glyph and label
+                  are the same grey, and only the pointer brings them up. */}
+              <DuotoneIcon name={item.icon} size={18} className={active ? "hue-text" : "text-current"} />
               {item.label}
             </Link>
           );
