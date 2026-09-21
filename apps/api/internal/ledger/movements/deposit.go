@@ -54,6 +54,62 @@ func Deposit(
 	})
 }
 
+// DepositReversed takes back a deposit that should never have been credited.
+//
+// Not for a customer's money: what somebody deposited is theirs, and a
+// platform that can quietly remove it has no business holding it. This is for
+// a credit the chain never justified -- a transfer counted as an arrival when
+// it was the platform returning its own funds, which the watcher cannot tell
+// apart from a payment without being told.
+//
+// The entries are the deposit's own, negated, so the pair nets to nothing and
+// the history shows both: what was credited, and that it was taken back. A
+// deletion would leave a balance nobody can explain.
+//
+// It refuses to overdraw. If the money has already been spent there is nothing
+// to reverse without taking it from somewhere else, and which somewhere is a
+// decision for a person, not for this.
+func DepositReversed(
+	ctx context.Context,
+	tx pgx.Tx,
+	user uuid.UUID,
+	amount money.Amount,
+	source, reference, why string,
+) (uuid.UUID, error) {
+	if !amount.IsPositive() {
+		return uuid.Nil, fmt.Errorf("movements: a reversal must be positive, got %s", amount)
+	}
+	if source == "" || reference == "" {
+		return uuid.Nil, fmt.Errorf("movements: a reversal needs the deposit's source and reference")
+	}
+	if why == "" {
+		return uuid.Nil, fmt.Errorf("movements: a reversed deposit must say why")
+	}
+
+	c := amount.Currency()
+	r := newResolver(ctx, tx)
+	from := r.account(ledger.User(user), ledger.KindAvailable, c)
+	if r.err != nil {
+		return uuid.Nil, r.err
+	}
+	if err := ensureFunds(ctx, tx, from, amount); err != nil {
+		return uuid.Nil, err
+	}
+
+	external := r.account(ledger.System(), ledger.KindExternal, c)
+	if r.err != nil {
+		return uuid.Nil, r.err
+	}
+
+	return ledger.Post(ctx, tx, ledger.Ref{
+		Type:    "deposit_reversed",
+		IdemKey: "deposit_reversed:" + source + ":" + reference,
+	}, []ledger.Entry{
+		{AccountID: from, Amount: amount.Neg(), Reason: "deposit.reversed:" + why},
+		{AccountID: external, Amount: amount, Reason: "deposit.returned_to_" + source},
+	})
+}
+
 // Withdraw is the mirror: value leaving for a bank account or a chain address.
 //
 // It debits the user immediately and parks the value in `payable` rather than

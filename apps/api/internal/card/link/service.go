@@ -82,6 +82,30 @@ func (s *Service) Start(ctx context.Context, activationToken string, user uuid.U
 			}
 		}
 
+		// Retire any session that has aged out before inserting the new one.
+		//
+		// card_link_sessions_live is a partial unique index on card_id WHERE
+		// state IN ('started','provisioned') -- it has no notion of expiry,
+		// while liveSession above deliberately does. So an abandoned ceremony
+		// leaves a row that liveSession refuses to resume and the index
+		// refuses to let anyone replace: every retry died on a 23505 the
+		// handler could only report as "Something went wrong setting up your
+		// card", and the card could never be linked again by anybody.
+		//
+		// Done here, in the same transaction as the insert, rather than left
+		// to a sweeper. Service.Expire exists for this and is called from
+		// nowhere; even scheduled, it would leave a window between a session
+		// ageing out and the next tick in which the card is unlinkable. The
+		// person retrying is the one who needs it gone, so reconcile on their
+		// request and the trap cannot form.
+		if _, err := tx.Exec(ctx, `
+			UPDATE card_link_sessions SET state = 'abandoned', updated_at = now()
+			 WHERE card_id = $1
+			   AND state IN ('started', 'provisioned')
+			   AND expires_at <= now()`, cardID); err != nil {
+			return fmt.Errorf("link: retire expired session: %w", err)
+		}
+
 		now := s.now()
 		s2 := &Session{CardID: cardID, State: StateStarted, ExpiresAt: now.Add(SessionTTL)}
 		if err := tx.QueryRow(ctx, `

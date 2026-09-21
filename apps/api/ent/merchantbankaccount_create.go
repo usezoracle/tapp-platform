@@ -77,6 +77,20 @@ func (mbac *MerchantBankAccountCreate) SetAccountName(s string) *MerchantBankAcc
 	return mbac
 }
 
+// SetFintavaBankCode sets the "fintava_bank_code" field.
+func (mbac *MerchantBankAccountCreate) SetFintavaBankCode(s string) *MerchantBankAccountCreate {
+	mbac.mutation.SetFintavaBankCode(s)
+	return mbac
+}
+
+// SetNillableFintavaBankCode sets the "fintava_bank_code" field if the given value is not nil.
+func (mbac *MerchantBankAccountCreate) SetNillableFintavaBankCode(s *string) *MerchantBankAccountCreate {
+	if s != nil {
+		mbac.SetFintavaBankCode(*s)
+	}
+	return mbac
+}
+
 // SetVerifiedAt sets the "verified_at" field.
 func (mbac *MerchantBankAccountCreate) SetVerifiedAt(t time.Time) *MerchantBankAccountCreate {
 	mbac.mutation.SetVerifiedAt(t)
@@ -268,6 +282,10 @@ func (mbac *MerchantBankAccountCreate) createSpec() (*MerchantBankAccount, *sqlg
 		_spec.SetField(merchantbankaccount.FieldAccountName, field.TypeString, value)
 		_node.AccountName = value
 	}
+	if value, ok := mbac.mutation.FintavaBankCode(); ok {
+		_spec.SetField(merchantbankaccount.FieldFintavaBankCode, field.TypeString, value)
+		_node.FintavaBankCode = &value
+	}
 	if value, ok := mbac.mutation.VerifiedAt(); ok {
 		_spec.SetField(merchantbankaccount.FieldVerifiedAt, field.TypeTime, value)
 		_node.VerifiedAt = &value
@@ -398,6 +416,24 @@ func (u *MerchantBankAccountUpsert) SetAccountName(v string) *MerchantBankAccoun
 // UpdateAccountName sets the "account_name" field to the value that was provided on create.
 func (u *MerchantBankAccountUpsert) UpdateAccountName() *MerchantBankAccountUpsert {
 	u.SetExcluded(merchantbankaccount.FieldAccountName)
+	return u
+}
+
+// SetFintavaBankCode sets the "fintava_bank_code" field.
+func (u *MerchantBankAccountUpsert) SetFintavaBankCode(v string) *MerchantBankAccountUpsert {
+	u.Set(merchantbankaccount.FieldFintavaBankCode, v)
+	return u
+}
+
+// UpdateFintavaBankCode sets the "fintava_bank_code" field to the value that was provided on create.
+func (u *MerchantBankAccountUpsert) UpdateFintavaBankCode() *MerchantBankAccountUpsert {
+	u.SetExcluded(merchantbankaccount.FieldFintavaBankCode)
+	return u
+}
+
+// ClearFintavaBankCode clears the value of the "fintava_bank_code" field.
+func (u *MerchantBankAccountUpsert) ClearFintavaBankCode() *MerchantBankAccountUpsert {
+	u.SetNull(merchantbankaccount.FieldFintavaBankCode)
 	return u
 }
 
@@ -537,6 +573,27 @@ func (u *MerchantBankAccountUpsertOne) SetAccountName(v string) *MerchantBankAcc
 func (u *MerchantBankAccountUpsertOne) UpdateAccountName() *MerchantBankAccountUpsertOne {
 	return u.Update(func(s *MerchantBankAccountUpsert) {
 		s.UpdateAccountName()
+	})
+}
+
+// SetFintavaBankCode sets the "fintava_bank_code" field.
+func (u *MerchantBankAccountUpsertOne) SetFintavaBankCode(v string) *MerchantBankAccountUpsertOne {
+	return u.Update(func(s *MerchantBankAccountUpsert) {
+		s.SetFintavaBankCode(v)
+	})
+}
+
+// UpdateFintavaBankCode sets the "fintava_bank_code" field to the value that was provided on create.
+func (u *MerchantBankAccountUpsertOne) UpdateFintavaBankCode() *MerchantBankAccountUpsertOne {
+	return u.Update(func(s *MerchantBankAccountUpsert) {
+		s.UpdateFintavaBankCode()
+	})
+}
+
+// ClearFintavaBankCode clears the value of the "fintava_bank_code" field.
+func (u *MerchantBankAccountUpsertOne) ClearFintavaBankCode() *MerchantBankAccountUpsertOne {
+	return u.Update(func(s *MerchantBankAccountUpsert) {
+		s.ClearFintavaBankCode()
 	})
 }
 
@@ -846,6 +903,27 @@ func (u *MerchantBankAccountUpsertBulk) SetAccountName(v string) *MerchantBankAc
 func (u *MerchantBankAccountUpsertBulk) UpdateAccountName() *MerchantBankAccountUpsertBulk {
 	return u.Update(func(s *MerchantBankAccountUpsert) {
 		s.UpdateAccountName()
+	})
+}
+
+// SetFintavaBankCode sets the "fintava_bank_code" field.
+func (u *MerchantBankAccountUpsertBulk) SetFintavaBankCode(v string) *MerchantBankAccountUpsertBulk {
+	return u.Update(func(s *MerchantBankAccountUpsert) {
+		s.SetFintavaBankCode(v)
+	})
+}
+
+// UpdateFintavaBankCode sets the "fintava_bank_code" field to the value that was provided on create.
+func (u *MerchantBankAccountUpsertBulk) UpdateFintavaBankCode() *MerchantBankAccountUpsertBulk {
+	return u.Update(func(s *MerchantBankAccountUpsert) {
+		s.UpdateFintavaBankCode()
+	})
+}
+
+// ClearFintavaBankCode clears the value of the "fintava_bank_code" field.
+func (u *MerchantBankAccountUpsertBulk) ClearFintavaBankCode() *MerchantBankAccountUpsertBulk {
+	return u.Update(func(s *MerchantBankAccountUpsert) {
+		s.ClearFintavaBankCode()
 	})
 }
 

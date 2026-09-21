@@ -1,13 +1,13 @@
 {
-  "name": "Tapp",
-  "short_name": "Tapp",
-  "description": "Tap, pay, done.",
+  "name": "Freedom",
+  "short_name": "Freedom",
+  "description": "Tap, pay, and own a piece of the shop.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#FFFFFF",
-  "theme_color": "#FFFFFF",
+  "background_color": "#ffffff",
+  "theme_color": "#1c1c1e",
   "icons": [
     {
       "src": "/icon-192.png",

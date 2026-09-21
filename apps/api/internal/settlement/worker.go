@@ -160,6 +160,52 @@ func (w *Worker) submitPending(ctx context.Context) (int, error) {
 	return sent, nil
 }
 
+// Abandon returns an undeliverable payout's money and marks it failed.
+//
+// For a payout that will never be sent -- a rail retired, an arrangement
+// replaced -- rather than one a provider refused. The money goes back to the
+// beneficiary either way, because they are owed it and the delivery did not
+// happen; leaving it in `payable` would be the platform quietly keeping money
+// it neither earned nor delivered.
+//
+// Refuses anything already confirmed. A confirmed payout moved real money, and
+// returning its reservation would credit the beneficiary a second time for a
+// transfer they have already received.
+func (w *Worker) Abandon(ctx context.Context, id uuid.UUID, reason string) (*Payout, error) {
+	if reason == "" {
+		return nil, fmt.Errorf("settlement: abandoning a payout must say why")
+	}
+
+	var (
+		p        Payout
+		currency string
+		minor    int64
+	)
+	err := w.Pool.QueryRow(ctx, `
+		SELECT id, beneficiary_kind, beneficiary_id, currency, amount_minor, state
+		  FROM payouts WHERE id = $1`, id).
+		Scan(&p.ID, &p.Beneficiary.Kind, &p.Beneficiary.ID, &currency, &minor, &p.State)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("settlement: no payout %s", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("settlement: read payout: %w", err)
+	}
+	p.Amount = money.New(minor, money.Currency(currency))
+
+	switch p.State {
+	case Confirmed:
+		return nil, fmt.Errorf("settlement: payout %s is confirmed; returning it would pay twice", id)
+	case Failed:
+		return nil, fmt.Errorf("settlement: payout %s has already been returned", id)
+	}
+
+	if err := w.fail(ctx, &p, reason); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 // claim takes one pending payout, exclusively.
 //
 // A payout that has already failed is not claimed again until its backoff has

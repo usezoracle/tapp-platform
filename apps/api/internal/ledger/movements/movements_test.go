@@ -503,3 +503,80 @@ func TestATapAndAWithdrawalCannotBothTakeTheLastOfIt(t *testing.T) {
 		t.Fatalf("balance went negative: %s", final)
 	}
 }
+
+// A refunded order puts the merchant back where they were before the sale:
+// owed, and visibly so. The cardholder is untouched -- they were charged at the
+// till and the tap stands.
+func TestARefundedSettlementRestoresTheMerchantsClaim(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	cardholder, merchant := uuid.New(), uuid.New()
+	tapID := uuid.New()
+	amount := money.Naira(1_600)
+	fee := money.FeeFor(amount, 50)
+	owed, _ := amount.Sub(fee)
+
+	if _, err := Deposit(ctx, pool, cardholder, money.Naira(1_600), "bank", uuid.NewString()); err != nil {
+		t.Fatalf("Deposit: %v", err)
+	}
+	if err := spend(t, pool, func(tx pgx.Tx) error {
+		_, e := Tap(ctx, tx, cardholder, merchant, amount, fee, tapID)
+		return e
+	}); err != nil {
+		t.Fatalf("Tap: %v", err)
+	}
+	if err := spend(t, pool, func(tx pgx.Tx) error {
+		_, e := MerchantSettledOnChain(ctx, tx, merchant, owed, tapID, 0)
+		return e
+	}); err != nil {
+		t.Fatalf("MerchantSettledOnChain: %v", err)
+	}
+	if got := balance(t, pool, ledger.Merchant(merchant), ledger.KindMerchantPayable, money.NGN); !got.IsZero() {
+		t.Fatalf("merchant owed %s after the sale, want nothing", got)
+	}
+
+	externalDelta := delta(t, pool, ledger.System(), ledger.KindExternal, money.NGN, func() {
+		if err := spend(t, pool, func(tx pgx.Tx) error {
+			_, e := MerchantSettlementRefunded(ctx, tx, merchant, owed, tapID, 0, "refunded by the gateway")
+			return e
+		}); err != nil {
+			t.Fatalf("MerchantSettlementRefunded: %v", err)
+		}
+	})
+
+	if got := balance(t, pool, ledger.Merchant(merchant), ledger.KindMerchantPayable, money.NGN); got.Minor() != owed.Minor() {
+		t.Errorf("merchant owed %s after the refund, want %s", got, owed)
+	}
+	if externalDelta.Minor() != -owed.Minor() {
+		t.Errorf("external moved %s, want %s back out", externalDelta, owed.Neg())
+	}
+	if got := balance(t, pool, ledger.User(cardholder), ledger.KindAvailable, money.NGN); !got.IsZero() {
+		t.Errorf("cardholder holds %s, but a refunded settlement is not a refunded tap", got)
+	}
+
+	// Posting the same round's refund again is a replay, not a second refund.
+	err := spend(t, pool, func(tx pgx.Tx) error {
+		_, e := MerchantSettlementRefunded(ctx, tx, merchant, owed, tapID, 0, "refunded by the gateway")
+		return e
+	})
+	if !errors.Is(err, ledger.ErrDuplicate) {
+		t.Errorf("second refund of round 0: err = %v, want ErrDuplicate", err)
+	}
+
+	// The next round is a new sale, and its own discharge.
+	if err := spend(t, pool, func(tx pgx.Tx) error {
+		_, e := MerchantSettledOnChain(ctx, tx, merchant, owed, tapID, 1)
+		return e
+	}); err != nil {
+		t.Fatalf("MerchantSettledOnChain round 1: %v", err)
+	}
+	if got := balance(t, pool, ledger.Merchant(merchant), ledger.KindMerchantPayable, money.NGN); !got.IsZero() {
+		t.Errorf("merchant owed %s after round 1 sold, want nothing", got)
+	}
+	for c, sum := range globalSums(t, pool) {
+		if sum != 0 {
+			t.Errorf("global %s sum = %d, value was invented or destroyed", c, sum)
+		}
+	}
+}

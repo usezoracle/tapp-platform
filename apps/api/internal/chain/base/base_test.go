@@ -374,3 +374,169 @@ func TestASubCentDepositIsMarkedRatherThanRetried(t *testing.T) {
 		t.Errorf("state = %q, want failed so it is not retried every pass", state)
 	}
 }
+
+// Money sent back from the treasury is not a deposit. Returning funds swept
+// before the platform went non-custodial credited them a second time -- the
+// same money counted once when it arrived and again when it was given back.
+func TestMoneyReturnedFromTheTreasuryIsNotADeposit(t *testing.T) {
+	addrs, deposits := fixture(t)
+	ctx := context.Background()
+	user := uuid.New()
+
+	treasury := common.HexToAddress("0x1232c53d0e537e275E70C401AAB7e9E7E97E57C5")
+	deposits.Treasury = treasury
+
+	address, err := addrs.For(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A stranger paying in still credits.
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: "0x00000000000000000000000000000000000000A1",
+		To: address, AmountMicro: 1_000_000, BlockNumber: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The same amount coming back from the treasury does not.
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: treasury.Hex(),
+		To: address, AmountMicro: 1_000_000, BlockNumber: 101,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if credited, err := deposits.CreditConfirmed(ctx, 200); err != nil {
+		t.Fatalf("CreditConfirmed: %v", err)
+	} else if credited != 1 {
+		t.Fatalf("credited %d deposits, want 1 -- the return was counted as money arriving", credited)
+	}
+
+	b, err := ledger.Balance(ctx, deposits.Pool, ledger.User(user), ledger.KindAvailable, money.USD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Minor() != 100 {
+		t.Errorf("balance = %s, want $1.00 -- the same money was credited twice", b)
+	}
+}
+
+// A settlement order nobody filled is refunded by the Gateway to the account
+// that funded it. That is the cardholder's own USDC coming back, for a tap the
+// ledger has already charged, and crediting it would give them a second
+// balance for the same money.
+func TestARefundFromTheGatewayIsNotADeposit(t *testing.T) {
+	addrs, deposits := fixture(t)
+	ctx := context.Background()
+	user := uuid.New()
+
+	gateway := common.HexToAddress("0x30F6A8457F8E42371E204a9c103f2Bd42341dD0F")
+	deposits.Gateway = gateway
+
+	address, err := addrs.For(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: "0x00000000000000000000000000000000000000A1",
+		To: address, AmountMicro: 1_208_679, BlockNumber: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The order's refund, as the Gateway sends it: lower-cased, the way an
+	// RPC prints addresses, against a checksummed configured value.
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: strings.ToLower(gateway.Hex()),
+		To: address, AmountMicro: 1_208_679, BlockNumber: 101,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if credited, err := deposits.CreditConfirmed(ctx, 200); err != nil {
+		t.Fatalf("CreditConfirmed: %v", err)
+	} else if credited != 1 {
+		t.Fatalf("credited %d deposits, want 1 -- the refund was counted as money arriving", credited)
+	}
+
+	b, err := ledger.Balance(ctx, deposits.Pool, ledger.User(user), ledger.KindAvailable, money.USD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Minor() != 120 {
+		t.Errorf("balance = %s, want $1.20 -- the refund was credited as a deposit", b)
+	}
+}
+
+// Nothing is swept into the treasury any more, so a withdrawal paid from it
+// would fail with nothing to send. It comes out of the person's own deposit
+// address instead, sponsored, so withdrawing costs them no gas.
+func TestAWithdrawalIsPaidFromTheUsersOwnAccount(t *testing.T) {
+	addrs, deposits := fixture(t)
+	ctx := context.Background()
+	user := uuid.New()
+
+	address, err := addrs.For(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fund them, so the withdrawal has something to debit.
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: "0x00000000000000000000000000000000000000A1",
+		To: address, AmountMicro: 5_000_000, BlockNumber: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deposits.CreditConfirmed(ctx, 200); err != nil {
+		t.Fatal(err)
+	}
+
+	sender := &recordingSender{}
+	w := &Withdrawals{
+		Pool: deposits.Pool, Chain: &Chain{USDC: common.HexToAddress("0x8335")},
+		Addresses: addrs, SmartAccounts: sender,
+	}
+
+	dest := "0x00000000000000000000000000000000000000B2"
+	if _, err := w.Open(ctx, Request{
+		UserID: user, Amount: money.New(200, money.USD), To: dest,
+	}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := w.Send(ctx); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	if sender.from == "" {
+		t.Fatal("nothing was sent -- the withdrawal did not reach the smart account")
+	}
+	if !strings.EqualFold(sender.from, address) {
+		t.Errorf("sent from %s, want the user's own deposit address %s", sender.from, address)
+	}
+	if !strings.EqualFold(sender.to.Hex(), dest) {
+		t.Errorf("sent to %s, want %s", sender.to, dest)
+	}
+	// $2.00 is 2,000,000 in USDC's six decimals.
+	if sender.amount == nil || sender.amount.Int64() != 2_000_000 {
+		t.Errorf("sent %v, want 2000000 micro-USDC", sender.amount)
+	}
+	// The withdrawal id keys the operation, so a retry after a lost response
+	// cannot send the same money twice.
+	if !strings.HasPrefix(sender.idem, "withdrawal:") {
+		t.Errorf("idempotency key %q does not identify the withdrawal", sender.idem)
+	}
+}
+
+type recordingSender struct {
+	from   string
+	to     common.Address
+	amount *big.Int
+	idem   string
+}
+
+func (r *recordingSender) SweepSmartAccount(
+	_ context.Context, account string, _, to common.Address, amount *big.Int, idem string,
+) (string, error) {
+	r.from, r.to, r.amount, r.idem = account, to, amount, idem
+	return "0x" + strings.Repeat("ab", 32), nil
+}

@@ -229,7 +229,11 @@ func (ctrl *AuthController) Register(ctx *gin.Context) {
 		return
 	}
 
-	refreshTTL := time.Duration(authConf.JwtRefreshLifespan) * time.Minute
+	// JwtRefreshLifespan is already a Duration. Multiplying it by time.Minute
+	// again overflowed int64 and wrapped to roughly 246 years, so every refresh
+	// token issued was effectively permanent -- one that leaked stayed usable
+	// for as long as the account existed.
+	refreshTTL := authConf.JwtRefreshLifespan
 	issued, errJwt := authSvc.IssueNewFamily(
 		ctx,
 		user.ID,

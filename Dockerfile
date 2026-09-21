@@ -22,6 +22,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/rails .
 # private network and cannot be reached from a workstation, so `railway ssh`
 # into this container is the only place the command can run.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/cdp-reissue ./cmd/cdp-reissue
+# abandon-payout returns money reserved for a payout that will never be sent.
+# Ships here for the same reason: Railway's Postgres is private-network only,
+# so this container is the only place a command can reach it.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/abandon-payout ./cmd/abandon-payout
+# reverse-deposit takes back a credit the chain never justified.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/reverse-deposit ./cmd/reverse-deposit
+# reverse-tap refunds a card payment a merchant cannot reach from their app.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/reverse-tap ./cmd/reverse-tap
 
 # ---- runtime: minimal, non-root ----
 FROM alpine:3.20
@@ -32,6 +40,9 @@ RUN apk add --no-cache ca-certificates tzdata \
 USER app
 COPY --from=build /out/rails /usr/local/bin/rails
 COPY --from=build /out/cdp-reissue /usr/local/bin/cdp-reissue
+COPY --from=build /out/abandon-payout /usr/local/bin/abandon-payout
+COPY --from=build /out/reverse-deposit /usr/local/bin/reverse-deposit
+COPY --from=build /out/reverse-tap /usr/local/bin/reverse-tap
 # Railway/containers inject PORT; the app honours it (falls back to SERVER_PORT).
 EXPOSE 8000
 ENTRYPOINT ["rails"]

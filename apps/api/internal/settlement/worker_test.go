@@ -122,6 +122,13 @@ type fixture struct {
 func newFixture(t *testing.T, earned money.Amount) *fixture {
 	t.Helper()
 	pool := testPool(t)
+	// The worker's Tick claims the oldest pending payouts first, whoever
+	// raised them. Other packages' tests share this database and leave
+	// payouts behind, so start from an empty queue or the batch fills with
+	// somebody else's rows and this test's payout never gets its turn.
+	if _, err := pool.Exec(context.Background(), `DELETE FROM payouts WHERE state IN ('pending','submitting')`); err != nil {
+		t.Fatalf("clear payouts: %v", err)
+	}
 	rail := &fakeRail{accountName: "ADA OKAFOR", status: baas.TransferSuccess}
 
 	merchant := uuid.New()
@@ -414,5 +421,176 @@ func TestAPayoutNeedsTheNameTheBankReturned(t *testing.T) {
 	req.AccountName = ""
 	if _, err := f.Worker.Open(context.Background(), req); err == nil {
 		t.Fatal("a payout with no verified account name was accepted")
+	}
+}
+
+// bankAccount gives the merchant somewhere to be paid, verified, because
+// PayMerchants will not pay an unverified account.
+func (f *fixture) bankAccount(t *testing.T, verified bool) {
+	t.Helper()
+	verifiedAt := "now()"
+	if !verified {
+		verifiedAt = "NULL"
+	}
+	// The profile is owned by a real user row: sender_profiles carries a
+	// foreign key to users.
+	owner := uuid.New()
+	if _, err := f.Pool.Exec(context.Background(), `
+		INSERT INTO users
+			(id, created_at, updated_at, first_name, last_name, email, password, scope)
+		VALUES ($1, now(), now(), 'Test', 'Merchant', $2, '', 'user')`,
+		owner, owner.String()+"@test.local"); err != nil {
+		t.Fatalf("seed merchant user: %v", err)
+	}
+	if _, err := f.Pool.Exec(context.Background(), `
+		INSERT INTO sender_profiles (id, updated_at, domain_whitelist, user_sender_profile)
+		VALUES ($1, now(), '{}', $2)`, f.Merchant, owner); err != nil {
+		t.Fatalf("seed sender profile: %v", err)
+	}
+	if _, err := f.Pool.Exec(context.Background(), `
+		INSERT INTO merchant_bank_accounts
+			(id, created_at, updated_at, currency, bank_code, account_number,
+			 account_name, verified_at, sender_profile_merchant_bank_account)
+		VALUES (gen_random_uuid(), now(), now(), 'NGN', '058', '0123456789',
+		        'ADA OKAFOR', `+verifiedAt+`, $1)`, f.Merchant); err != nil {
+		t.Fatalf("seed bank account: %v", err)
+	}
+}
+
+// A tap credits merchant_payable and nothing used to draw it down, so
+// merchants accrued balances no process ever delivered. This is that step.
+func TestWhatAMerchantIsOwedBecomesAPayout(t *testing.T) {
+	f := newFixture(t, money.Naira(1_500))
+	f.bankAccount(t, true)
+	ctx := context.Background()
+
+	if _, err := f.Worker.PayMerchants(ctx); err != nil {
+		t.Fatalf("PayMerchants: %v", err)
+	}
+
+	// Counted for THIS merchant, not globally: the test database is
+	// persistent and carries merchants left owed by earlier runs, so a global
+	// count measures the leftovers as much as the behaviour under test.
+	if n := f.payoutCount(t); n != 1 {
+		t.Fatalf("opened %d payouts for this merchant, want 1", n)
+	}
+
+	// The claim is reserved, not still sitting there: paying it out twice is
+	// the failure this must not have.
+	if owed := f.owed(t); !owed.IsZero() {
+		t.Errorf("still owed %s after a payout was opened, want nothing", owed)
+	}
+
+	// A second pass must find nothing left to do for this merchant.
+	if _, err := f.Worker.PayMerchants(ctx); err != nil {
+		t.Fatalf("second PayMerchants: %v", err)
+	}
+	if n := f.payoutCount(t); n != 1 {
+		t.Errorf("payouts for this merchant = %d after a second pass, want 1 -- the same money would go twice", n)
+	}
+}
+
+// payoutCount is how many payouts exist for this fixture's merchant.
+func (f *fixture) payoutCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := f.Pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM payouts WHERE beneficiary_id = $1`, f.Merchant).Scan(&n); err != nil {
+		t.Fatalf("count payouts: %v", err)
+	}
+	return n
+}
+
+// An unverified account is skipped, not paid and not failed. account_name is
+// what the bank returned for the number; paying before that check is how money
+// reaches a mistyped digit and does not come back.
+func TestAnUnverifiedBankAccountIsNotPaid(t *testing.T) {
+	f := newFixture(t, money.Naira(1_500))
+	f.bankAccount(t, false)
+
+	if _, err := f.Worker.PayMerchants(context.Background()); err != nil {
+		t.Fatalf("PayMerchants: %v", err)
+	}
+	if n := f.payoutCount(t); n != 0 {
+		t.Fatalf("opened %d payouts against an unverified account, want 0", n)
+	}
+	// Still owed: the merchant has the money coming and can add an account.
+	if owed := f.owed(t); owed.Minor() != 150_000 {
+		t.Errorf("owed = %s, want the claim left intact at ₦1,500.00", owed)
+	}
+}
+
+// A bank transfer costs the same whatever it carries, so a few naira is left
+// to accrue rather than spent on fees. Nothing is deducted -- this decides
+// only WHEN the money moves.
+func TestATinyBalanceWaitsRatherThanPayingAFee(t *testing.T) {
+	f := newFixture(t, money.Naira(50))
+	f.bankAccount(t, true)
+
+	if _, err := f.Worker.PayMerchants(context.Background()); err != nil {
+		t.Fatalf("PayMerchants: %v", err)
+	}
+	if n := f.payoutCount(t); n != 0 {
+		t.Fatalf("opened %d payouts for ₦50, want 0 -- below the minimum", n)
+	}
+	if owed := f.owed(t); owed.Minor() != 5_000 {
+		t.Errorf("owed = %s, want ₦50.00 still owed and visible", owed)
+	}
+}
+
+// A payout stranded by a change of arrangement still owes its beneficiary the
+// money. Leaving it reserved in `payable` is the platform quietly holding what
+// it neither earned nor delivered.
+func TestAbandoningAPayoutReturnsWhatIsOwed(t *testing.T) {
+	f := newFixture(t, money.Naira(1_500))
+	ctx := context.Background()
+
+	p, err := f.Worker.Open(ctx, f.request(money.Naira(1_500)))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if owed := f.owed(t); !owed.IsZero() {
+		t.Fatalf("owed %s after opening, want it reserved", owed)
+	}
+
+	if _, err := f.Worker.Abandon(ctx, p.ID, "the rail was retired"); err != nil {
+		t.Fatalf("Abandon: %v", err)
+	}
+	if owed := f.owed(t); owed.Minor() != 150_000 {
+		t.Errorf("owed = %s after abandoning, want ₦1,500.00 back", owed)
+	}
+	if s := f.state(t, p.ID); s != "failed" {
+		t.Errorf("payout state = %q, want failed", s)
+	}
+
+	// Twice must not pay twice.
+	if _, err := f.Worker.Abandon(ctx, p.ID, "again"); err == nil {
+		t.Error("abandoning an already-returned payout was allowed")
+	}
+	if owed := f.owed(t); owed.Minor() != 150_000 {
+		t.Errorf("owed = %s after a second abandon, want it unchanged", owed)
+	}
+}
+
+// A confirmed payout moved real money. Returning its reservation would credit
+// the beneficiary a second time for a transfer they have already received.
+func TestAConfirmedPayoutCannotBeAbandoned(t *testing.T) {
+	f := newFixture(t, money.Naira(1_500))
+	ctx := context.Background()
+
+	p, err := f.Worker.Open(ctx, f.request(money.Naira(1_500)))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := f.Pool.Exec(ctx,
+		`UPDATE payouts SET state = 'confirmed' WHERE id = $1`, p.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.Worker.Abandon(ctx, p.ID, "should be refused"); err == nil {
+		t.Fatal("a confirmed payout was abandoned -- the beneficiary would be paid twice")
+	}
+	if owed := f.owed(t); !owed.IsZero() {
+		t.Errorf("owed = %s, want nothing restored for a delivered payout", owed)
 	}
 }

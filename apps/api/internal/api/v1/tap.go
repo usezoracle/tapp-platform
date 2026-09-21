@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/usezoracle/tapp/api/internal/card/tap"
+	"github.com/usezoracle/tapp/api/internal/money"
 	u "github.com/usezoracle/tapp/api/utils"
 )
 
@@ -83,13 +84,17 @@ type debitRequest struct {
 type debitResponse struct {
 	TapID  string `json:"tap_id"`
 	Status string `json:"status"`
-	Amount string `json:"amount"`
-	Fee    string `json:"fee"`
-	Tier   string `json:"tier"`
+	// Money goes out as money.Amount ({minor, currency, display}) like every
+	// other endpoint. It used to go out as Amount.String() -- "₦5,000.00" --
+	// in a field the merchant app parsed as a decimal, so the app showed ₦0
+	// on every receipt.
+	Amount money.Amount `json:"amount"`
+	Fee    money.Amount `json:"fee"`
+	Tier   string       `json:"tier"`
 	// NewCardToken must be written to the card, then acknowledged. Until it is,
 	// the card's previous token also still works.
-	NewCardToken   string `json:"new_card_token"`
-	RemainingDaily string `json:"remaining_daily"`
+	NewCardToken   string       `json:"new_card_token"`
+	RemainingDaily money.Amount `json:"remaining_daily"`
 }
 
 // Debit performs the payment.
@@ -140,11 +145,11 @@ func (h *TapHandler) Debit(ctx *gin.Context) {
 		// saying otherwise is the claim the predecessor made about payments
 		// that never moved at all.
 		Status:         "charged",
-		Amount:         receipt.Amount.String(),
-		Fee:            receipt.Fee.String(),
+		Amount:         receipt.Amount,
+		Fee:            receipt.Fee,
 		Tier:           string(receipt.Tier),
 		NewCardToken:   hex.EncodeToString(receipt.NewToken),
-		RemainingDaily: receipt.RemainingDaily.String(),
+		RemainingDaily: receipt.RemainingDaily,
 	})
 }
 

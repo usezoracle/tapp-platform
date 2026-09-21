@@ -105,6 +105,14 @@ func (s *Service) Reverse(ctx context.Context, merchantID, tapID uuid.UUID, reas
 		if err != nil {
 			return fmt.Errorf("tap: record reversal: %w", err)
 		}
+
+		// The market has to unwind what the tap bought, and it learns that
+		// the same way it learned of the tap: a row in this transaction.
+		if s.EquityReversal != nil {
+			if err := s.EquityReversal(ctx, tx, tapID, reason); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }

@@ -14,8 +14,8 @@ type IconButtonProps = {
 const IconButton = ({ icon, onClick, isActive }: IconButtonProps) => (
   <button
     type="button"
-    className={`flex cursor-pointer items-center justify-center rounded-full border p-1.5 transition-all ${
-      isActive ? "border-gray-300 dark:border-white/20" : "border-transparent"
+    className={`focus-ring flex size-7 cursor-pointer items-center justify-center rounded-sm transition-colors [&>svg]:size-4 ${
+      isActive ? "bg-sunken text-fg" : "text-fg-subtle hover:text-fg"
     }`}
     onClick={onClick}
     title={`Switch to ${isActive ? "dark" : "light"} mode`}
@@ -34,7 +34,7 @@ export function ThemeSwitch() {
   }, []);
 
   if (!mounted) {
-    return <div className="h-[38px] w-[74px]" aria-hidden />;
+    return <div className="h-8 w-[62px]" aria-hidden />;
   }
 
   const getBlobPath = (cx: number, cy: number, r: number, nodes: number[]): string => {
@@ -245,14 +245,14 @@ export function ThemeSwitch() {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2 rounded-full border border-gray-300 p-1.5 transition-all dark:border-white/20">
+      <div className="flex items-center gap-0.5 rounded-md border border-line p-0.5 transition-colors">
         <IconButton
-          icon={<PiSun className="h-auto w-4 text-gray-400 dark:text-white/50" />}
+          icon={<PiSun />}
           onClick={(e) => handleThemeChange(e, "light")}
           isActive={resolvedTheme === "light"}
         />
         <IconButton
-          icon={<PiMoon className="h-auto w-4 text-gray-400 dark:text-white/50" />}
+          icon={<PiMoon />}
           onClick={(e) => handleThemeChange(e, "dark")}
           isActive={resolvedTheme === "dark"}
         />

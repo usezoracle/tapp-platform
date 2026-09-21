@@ -11,6 +11,7 @@ import (
 	"github.com/usezoracle/tapp/api/config"
 	apiv1 "github.com/usezoracle/tapp/api/internal/api/v1"
 	"github.com/usezoracle/tapp/api/internal/cash"
+	"github.com/usezoracle/tapp/api/internal/equity"
 	"github.com/usezoracle/tapp/api/internal/settlement"
 	"github.com/usezoracle/tapp/api/routers"
 	"github.com/usezoracle/tapp/api/services"
@@ -102,19 +103,44 @@ func main() {
 
 		if baseRail != nil {
 			go baseRail.Watcher.Run(context.Background(), apiv1.BasePollInterval())
-			// Pooling is the point: one key protects everything. Until a
-			// deposit is swept it sits at an address whose key must be
-			// re-derived to touch, and a withdrawal cannot be paid from money
-			// spread across a thousand addresses.
-			go baseRail.Sweeper.Run(context.Background(), apiv1.BasePollInterval())
+
+			// The sweeper is deliberately NOT started.
+			//
+			// It pooled every deposit into the treasury, which is what made
+			// the platform custodian of the money. A card tap now sells the
+			// cardholder's own USDC to the settlement gateway from their own
+			// smart account, so the money has to still be there: a swept
+			// balance is an account that cannot pay for anything.
+			//
+			// The code is kept because retired deposit addresses still hold
+			// seed-derived funds that only it can move. Starting it again
+			// would empty every account the offramp spends from.
 			go baseRail.Withdrawals.Run(context.Background(), apiv1.BasePollInterval())
 		}
 
-		// Deliver what the ledger says is owed. Until this runs, merchants
-		// accrue money that nothing pays out -- which is the one state where
-		// the system is wrong rather than merely incomplete.
+		// Sell each tap's USDC to the settlement gateway, from the
+		// cardholder's own account, so a liquidity provider pays the
+		// merchant's bank. This is what actually delivers a card payment.
+		if s := apiv1.SharedSettler(); s != nil {
+			go s.Run(context.Background(), settlementInterval())
+		}
+
+		// Bank payouts for everything that is not a card tap: the sender
+		// offramp still reserves and delivers through a provider.
 		go (&settlement.Worker{Pool: storage.Pool, Rail: baas.Default()}).
 			Run(context.Background(), settlementInterval())
+
+		// The naira leg of a tap: what the cardholder paid from a naira
+		// balance has no USDC to sell, and is paid to the merchant out of
+		// the cardholder's own wallet at the bank rail.
+		go apiv1.SharedNairaWorker().Run(context.Background(), apiv1.NairaSettlementInterval())
+
+		// Tell the equity market about each tap, from the outbox the tap's
+		// own transaction wrote to. Nothing without a market.
+		if c := apiv1.SharedEquity(); c.Enabled() {
+			go (&equity.Worker{Pool: storage.Pool, Client: c}).
+				Run(context.Background(), config.EquityConfig().OutboxInterval)
+		}
 	}
 
 	// Run the server

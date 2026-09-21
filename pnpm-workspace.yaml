@@ -1,6 +1,8 @@
 packages:
   - "apps/pwa"
   - "apps/merchant"
+  - "apps/business"
+  - "apps/landing"
   - "packages/*"
 allowBuilds:
   esbuild: true

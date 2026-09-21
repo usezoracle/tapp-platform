@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -155,10 +155,10 @@ function NoTokenState() {
 
         <div className="space-y-2">
           <h1 className="text-xl font-semibold text-neutral-900 dark:text-white">
-            Activate your Tapp Card
+            Activate your Freedom Card
           </h1>
           <p className="text-xs leading-relaxed text-gray-500 dark:text-white/60">
-            Hold your physical Tapp Card against the back of your phone to pair it with your wallet.
+            Hold your physical Freedom Card against the back of your phone to pair it with your wallet.
           </p>
         </div>
 
@@ -175,7 +175,8 @@ function NoTokenState() {
               <Button
                 variant="primary"
                 onClick={startNfcScan}
-                className="mt-2.5 w-full py-2 text-xs"
+                size="sm"
+                className="mt-2.5 w-full"
               >
                 Scan with NFC
               </Button>
@@ -276,13 +277,29 @@ function ClaimingState({
   );
   const [error, setError] = useState<string | null>(null);
 
+  // onDone is read through a ref so it can stay OUT of the effect's
+  // dependencies.
+  //
+  // The parent passes it as an inline arrow, so it has a new identity on every
+  // render -- and the session context hands out a new value whenever a token
+  // refresh calls notifySessionChange(), because readSession() JSON.parses a
+  // fresh object each time. With onDone in the dependency list, any of that
+  // tore this effect down mid-flight: the cleanup set cancelled, the claim
+  // that was already succeeding on the server had its response thrown away,
+  // and a replacement request went out. The card ended up claimed while this
+  // screen span on "Claiming your card…" forever.
+  const onDoneRef = useRef(onDone);
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  });
+
   useEffect(() => {
     let cancelled = false;
     async function go() {
       try {
         const session = await linkApi.start(token, jwt);
         if (cancelled) return;
-        onDone(session.id, session.cardId);
+        onDoneRef.current(session.id, session.cardId);
       } catch (err) {
         if (cancelled) return;
         if (
@@ -303,7 +320,10 @@ function ClaimingState({
     return () => {
       cancelled = true;
     };
-  }, [token, jwt, onDone]);
+    // Deliberately keyed on the card and the identity claiming it, nothing
+    // else. Claiming is a one-shot side effect; re-running it on an unrelated
+    // re-render is what broke it.
+  }, [token, jwt]);
 
   if (status === "claiming") {
     return (

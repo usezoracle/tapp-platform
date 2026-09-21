@@ -27,6 +27,8 @@ const (
 	FieldAccountNumber = "account_number"
 	// FieldAccountName holds the string denoting the account_name field in the database.
 	FieldAccountName = "account_name"
+	// FieldFintavaBankCode holds the string denoting the fintava_bank_code field in the database.
+	FieldFintavaBankCode = "fintava_bank_code"
 	// FieldVerifiedAt holds the string denoting the verified_at field in the database.
 	FieldVerifiedAt = "verified_at"
 	// EdgeSenderProfile holds the string denoting the sender_profile edge name in mutations.
@@ -51,6 +53,7 @@ var Columns = []string{
 	FieldBankCode,
 	FieldAccountNumber,
 	FieldAccountName,
+	FieldFintavaBankCode,
 	FieldVerifiedAt,
 }
 
@@ -130,6 +133,11 @@ func ByAccountNumber(opts ...sql.OrderTermOption) OrderOption {
 // ByAccountName orders the results by the account_name field.
 func ByAccountName(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAccountName, opts...).ToFunc()
+}
+
+// ByFintavaBankCode orders the results by the fintava_bank_code field.
+func ByFintavaBankCode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldFintavaBankCode, opts...).ToFunc()
 }
 
 // ByVerifiedAt orders the results by the verified_at field.

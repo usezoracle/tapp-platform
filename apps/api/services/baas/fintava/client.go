@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -68,6 +69,23 @@ type envelope struct {
 	StatusCode any             `json:"statusCode"`
 	Message    string          `json:"message"`
 	Data       json.RawMessage `json:"data"`
+}
+
+// envelopeStatus reads the numeric status Fintava puts in the body, when it
+// puts one there; 0 when absent or not a number.
+func envelopeStatus(env envelope) int {
+	for _, v := range []any{env.StatusCode, env.Status} {
+		switch x := v.(type) {
+		case float64:
+			return int(x)
+		case string:
+			var n int
+			if _, err := fmt.Sscanf(x, "%d", &n); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // APIError is a non-2xx answer from Fintava.
@@ -120,7 +138,12 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 	var env envelope
 	_ = json.Unmarshal(raw, &env) // tolerate non-envelope bodies
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	// A refusal can arrive as an HTTP error or as a 2xx whose body carries
+	// its own status of 4xx/5xx. Both are refusals; neither must be read as
+	// "accepted, pending". A body that says status 400 inside a 200 is what
+	// turned a refused transfer into a phantom pending one.
+	bodyStatus := envelopeStatus(env)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || bodyStatus >= 400 {
 		msg := env.Message
 		if msg == "" {
 			msg = strings.TrimSpace(string(raw))
@@ -128,7 +151,11 @@ func (c *Client) do(ctx context.Context, method, path string, body any, out any)
 				msg = msg[:300]
 			}
 		}
-		return &APIError{StatusCode: resp.StatusCode, Message: msg}
+		code := resp.StatusCode
+		if code >= 200 && code < 300 {
+			code = bodyStatus
+		}
+		return &APIError{StatusCode: code, Message: msg}
 	}
 	if out != nil {
 		// Prefer the data field; fall back to the whole body for
@@ -229,24 +256,61 @@ type NameEnquiryResult struct {
 	BankName      string `json:"bankName"`
 }
 
+// nameEnquiryPayload is what the live endpoint actually answers:
+//
+//	{"data": {"status": true, "account": {"bankCode": "090405",
+//	  "accountName": "…", "accountNumber": "…", "responseCode": "00"}}}
+//
+// The flat shape is kept for the older responses. An enquiry that decodes
+// to no name is refused by the caller, which is right — but it must not be
+// refused because the name was in a field nobody read.
+type nameEnquiryPayload struct {
+	NameEnquiryResult
+	Status  *bool `json:"status"`
+	Account struct {
+		AccountName   string `json:"accountName"`
+		AccountNumber string `json:"accountNumber"`
+		BankCode      string `json:"bankCode"`
+		BankName      string `json:"bankName"`
+		ResponseCode  string `json:"responseCode"`
+	} `json:"account"`
+}
+
 // NameEnquiry resolves the account name behind number+sortCode.
 func (c *Client) NameEnquiry(ctx context.Context, accountNumber, sortCode string) (*NameEnquiryResult, error) {
 	q := url.Values{"accountNumber": {accountNumber}, "sortCode": {sortCode}}
-	var out NameEnquiryResult
+	var out nameEnquiryPayload
 	if err := c.do(ctx, http.MethodGet, "/name/enquiry?"+q.Encode(), nil, &out); err != nil {
 		return nil, err
 	}
-	return &out, nil
+	r := out.NameEnquiryResult
+	if r.AccountName == "" && out.Account.AccountName != "" {
+		r = NameEnquiryResult{
+			AccountName:   out.Account.AccountName,
+			AccountNumber: firstNonEmpty(out.Account.AccountNumber, accountNumber),
+			SortCode:      firstNonEmpty(out.Account.BankCode, sortCode),
+			BankName:      out.Account.BankName,
+		}
+	}
+	if r.AccountName == "" {
+		return nil, fmt.Errorf("fintava: name enquiry for %s/%s answered without an account name", accountNumber, sortCode)
+	}
+	return &r, nil
 }
 
 // TransferResult is the tolerant decode of transfer submit/status
 // responses.
 type TransferResult struct {
+	// ID is the rail's own transaction id (live /bank/credit answers
+	// data.id + data.reference + total + transaction_fee, and no status).
+	ID                string      `json:"id"`
 	Reference         string      `json:"reference"`
 	TransactionRef    string      `json:"transactionReference"`
 	CustomerReference string      `json:"customerReference"`
 	Status            string      `json:"status"`
 	Amount            flexDecimal `json:"amount"`
+	Total             flexDecimal `json:"total"`
+	TransactionFee    flexDecimal `json:"transaction_fee"`
 	Charges           flexDecimal `json:"charges"`
 	Message           string      `json:"message"`
 }
@@ -255,7 +319,10 @@ func (t TransferResult) AnyReference() string {
 	if t.Reference != "" {
 		return t.Reference
 	}
-	return t.TransactionRef
+	if t.TransactionRef != "" {
+		return t.TransactionRef
+	}
+	return t.ID
 }
 
 // MerchantTransfer pays a bank account from the MERCHANT wallet.
@@ -263,7 +330,9 @@ func (t TransferResult) AnyReference() string {
 // from the dispatcher) — Fintava echoes it on webhooks.
 func (c *Client) MerchantTransfer(ctx context.Context, customerReference string, amount decimal.Decimal, accountNumber, accountName, sortCode, narration string) (*TransferResult, error) {
 	body := map[string]any{
-		"amount":            amount, // naira (documented float, e.g. 1000.00)
+		// A JSON number, as the backbone sends it. decimal.Decimal marshals as
+		// a string, and the rail answers a string amount with a bare 500.
+		"amount":            amountNumber(amount), // naira (documented float, e.g. 1000.00)
 		"accountNumber":     accountNumber,
 		"accountName":       accountName,
 		"sortCode":          sortCode,
@@ -273,6 +342,62 @@ func (c *Client) MerchantTransfer(ctx context.Context, customerReference string,
 	var out TransferResult
 	if err := c.do(ctx, http.MethodPost, "/bank/credit/merchant", body, &out); err != nil {
 		return nil, err
+	}
+	return &out, nil
+}
+
+// CustomerTransfer pays a bank account from a CUSTOMER wallet rather than
+// the merchant wallet: POST /bank/credit with sourceId naming the customer.
+//
+// This is how a cardholder's own naira, in their STATIC_FUND deposit
+// wallet, pays a merchant. The Zerocard backbone (integrations/fintava)
+// sends the same body with sourceId as the customer id.
+func (c *Client) CustomerTransfer(ctx context.Context, sourceID, customerReference string, amount decimal.Decimal, accountNumber, accountName, sortCode, narration string) (*TransferResult, error) {
+	body := map[string]any{
+		"sourceId":          sourceID,
+		"amount":            amountNumber(amount), // a JSON number; see MerchantTransfer
+		"accountNumber":     accountNumber,
+		"accountName":       accountName,
+		"sortCode":          sortCode,
+		"narration":         narration,
+		"customerReference": customerReference,
+	}
+	var out TransferResult
+	if err := c.do(ctx, http.MethodPost, "/bank/credit", body, &out); err != nil {
+		return nil, err
+	}
+	slog.Info("fintava: bank credit accepted",
+		"reference", customerReference, "rail_id", out.ID, "rail_ref", out.Reference,
+		"amount", amount.String(), "fee", out.TransactionFee.String())
+	if out.AnyReference() == "" {
+		// The rail answered 2xx but named no transaction. Nothing we can
+		// chase, nothing we can prove was created: a refusal, not a pending.
+		return nil, &APIError{StatusCode: 502, Message: "fintava: bank credit answered without a transaction id or reference"}
+	}
+	return &out, nil
+}
+
+// WalletToWallet moves money between two Fintava wallets, by account number:
+// POST /transaction/wallet-to-wallet. The rail charges the SENDER a flat fee
+// on top of the amount ("you need ₦1,000,015" for ₦1,000,000), reported back
+// as transaction_fee.
+func (c *Client) WalletToWallet(ctx context.Context, customerReference string, amount decimal.Decimal, senderAccount, receiverAccount, narration string) (*TransferResult, error) {
+	body := map[string]any{
+		"senderAccount":     senderAccount,
+		"receiverAccount":   receiverAccount,
+		"amount":            amountNumber(amount),
+		"narration":         narration,
+		"CustomerReference": customerReference, // documented capitalised, as on the merchant transfer
+	}
+	var out TransferResult
+	if err := c.do(ctx, http.MethodPost, "/transaction/wallet-to-wallet", body, &out); err != nil {
+		return nil, err
+	}
+	slog.Info("fintava: wallet-to-wallet accepted",
+		"reference", customerReference, "rail_id", out.ID, "rail_ref", out.Reference,
+		"amount", amount.String(), "fee", out.TransactionFee.String())
+	if out.AnyReference() == "" {
+		return nil, &APIError{StatusCode: 502, Message: "fintava: wallet-to-wallet answered without a transaction id or reference"}
 	}
 	return &out, nil
 }
@@ -300,29 +425,95 @@ type CreateCustomerRequest struct {
 	NIN         string `json:"nin"`
 }
 
-// Customer is the tolerant decode of a created/fetched customer with
-// their wallet.
-type Customer struct {
-	ID     string `json:"id"`
-	CustID string `json:"customerId"`
-	Wallet struct {
-		ID            string      `json:"id"`
-		AccountNumber string      `json:"accountNumber"`
-		AccountName   string      `json:"accountName"`
-		BankName      string      `json:"bankName"`
-		Balance       flexDecimal `json:"availableBalance"`
-	} `json:"wallet"`
-	AccountNumber string `json:"accountNumber"` // some responses flatten
-	AccountName   string `json:"accountName"`
-	BankName      string `json:"bankName"`
+// BankRef is a bank as a rail names it: a field sent either as a bare string
+// ("loma") or as an object ({"name":"Loma MFB","code":"090620"}). The
+// backbone's pickProviderField only ever saw strings; being ready for the
+// object shape costs nothing and means a schema change on their side
+// degrades to "no bank" rather than a decode error that loses the account.
+type BankRef struct {
+	Name string
+	Code string
 }
 
-func (cu Customer) CustomerID() string {
-	if cu.CustID != "" {
-		return cu.CustID
+func (f *BankRef) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		*f = BankRef{}
+		return nil
 	}
-	return cu.ID
+	if strings.HasPrefix(s, `"`) {
+		var v string
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		*f = BankRef{Name: strings.TrimSpace(v)}
+		return nil
+	}
+	var obj struct {
+		Name     string `json:"name"`
+		BankName string `json:"bankName"`
+		Title    string `json:"title"`
+		Code     string `json:"code"`
+		BankCode string `json:"bankCode"`
+		SortCode string `json:"sortCode"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		// Something else entirely (a number, an array): not a bank, not an
+		// error worth failing the whole customer over.
+		*f = BankRef{}
+		return nil
+	}
+	*f = BankRef{
+		Name: strings.TrimSpace(firstNonEmpty(obj.Name, obj.BankName, obj.Title)),
+		Code: strings.TrimSpace(firstNonEmpty(obj.SortCode, obj.BankCode, obj.Code)),
+	}
+	return nil
 }
+
+// Customer is the tolerant decode of a created/fetched customer with
+// their wallet.
+//
+// Live shape of POST /create/customer (mirrored from the Zerocard
+// backbone, which has seen it):
+//
+//	{"data": {"userInfo": {"id": "<customer id>", ...},
+//	          "wallet":   {"id": "<wallet id>", "accountNumber": "...",
+//	                       "accountName": "...", "serviceProvider": "loma",
+//	                       "bank": "...", "fundMethod": "STATIC_FUND"}}}
+//
+// The bank is `wallet.serviceProvider` and/or `wallet.bank` -- never
+// `bankName`, which is what this struct read for its first weeks and got
+// nothing from.
+type Customer struct {
+	ID       string `json:"id"`
+	CustID   string `json:"customerId"`
+	UserInfo struct {
+		ID string `json:"id"`
+	} `json:"userInfo"`
+	Wallet struct {
+		ID              string      `json:"id"`
+		AccountNumber   string      `json:"accountNumber"`
+		AccountName     string      `json:"accountName"`
+		BankName        string      `json:"bankName"`
+		ServiceProvider BankRef     `json:"serviceProvider"`
+		Bank            BankRef     `json:"bank"`
+		Balance         flexDecimal `json:"availableBalance"`
+	} `json:"wallet"`
+	AccountNumber   string  `json:"accountNumber"` // some responses flatten
+	AccountName     string  `json:"accountName"`
+	BankName        string  `json:"bankName"`
+	ServiceProvider BankRef `json:"serviceProvider"`
+	Bank            BankRef `json:"bank"`
+}
+
+// CustomerID is Fintava's id for the person (userInfo.id on the live
+// shape). Support-facing; it is not what the wallet endpoints take.
+func (cu Customer) CustomerID() string {
+	return firstNonEmpty(cu.CustID, cu.ID, cu.UserInfo.ID)
+}
+
+// WalletID is what /customer/wallet/balance/{id} takes.
+func (cu Customer) WalletID() string { return cu.Wallet.ID }
 
 func (cu Customer) DepositAccountNumber() string {
 	if cu.Wallet.AccountNumber != "" {
@@ -331,14 +522,180 @@ func (cu Customer) DepositAccountNumber() string {
 	return cu.AccountNumber
 }
 
-func (cu Customer) DepositBankName() string {
-	if cu.Wallet.BankName != "" {
-		return cu.Wallet.BankName
+// RawBank is the bank exactly as the rail named it -- "loma", or a bank
+// object -- with whichever code it carried. Empty when the response had
+// none; it is the caller's job to decide what to show then. There is
+// deliberately no placeholder here any more: "Fintava partner bank" was
+// shown to real people as the bank to send their money to.
+func (cu Customer) RawBank() BankRef {
+	for _, f := range []BankRef{
+		cu.Wallet.ServiceProvider, cu.Wallet.Bank, {Name: cu.Wallet.BankName},
+		cu.ServiceProvider, cu.Bank, {Name: cu.BankName},
+	} {
+		if f.Name != "" || f.Code != "" {
+			return f
+		}
 	}
-	if cu.BankName != "" {
-		return cu.BankName
+	return BankRef{}
+}
+
+// customerListItem is one row of GET /customers/list. The wallet hangs
+// off userInfo there, not off the row.
+type customerListItem struct {
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	Phone    string `json:"phone"`
+	UserInfo struct {
+		ID     string `json:"id"`
+		Wallet struct {
+			ID            string  `json:"id"`
+			AccountNumber string  `json:"accountNumber"`
+			AccountName   string  `json:"accountName"`
+			Provider      BankRef `json:"serviceProvider"`
+			Bank          BankRef `json:"bank"`
+		} `json:"wallet"`
+	} `json:"userInfo"`
+}
+
+// FindCustomerWallet looks a customer up by search term (their email)
+// and returns the one whose wallet has the given account number.
+//
+// This exists for accounts opened before the wallet id was recorded:
+// the balance endpoint wants the wallet id, the row has none, and the
+// account number is the one identifier both sides agree on.
+func (c *Client) FindCustomerWallet(ctx context.Context, searchTerm, accountNumber string) (*Customer, error) {
+	q := url.Values{"searchTerm": {searchTerm}, "take": {"50"}}
+	var rows []customerListItem
+	if err := c.do(ctx, http.MethodGet, "/customers/list?"+q.Encode(), nil, &rows); err != nil {
+		return nil, err
 	}
-	return "Fintava partner bank"
+	for _, r := range rows {
+		w := r.UserInfo.Wallet
+		if w.AccountNumber != accountNumber {
+			continue
+		}
+		var cu Customer
+		cu.ID = r.ID
+		cu.UserInfo.ID = r.UserInfo.ID
+		cu.Wallet.ID = w.ID
+		cu.Wallet.AccountNumber = w.AccountNumber
+		cu.Wallet.AccountName = w.AccountName
+		cu.Wallet.ServiceProvider = w.Provider
+		cu.Wallet.Bank = w.Bank
+		return &cu, nil
+	}
+	return nil, fmt.Errorf("fintava: no customer matching %q holds account %s", searchTerm, accountNumber)
+}
+
+// ResolveBank turns what the rail called the bank into what a person
+// should see, and the code a transfer to it needs.
+//
+// "loma" is what Fintava says; "Loma Microfinance Bank" and its NIP code
+// are what somebody typing a transfer into their banking app needs. The
+// bank list is the source of both: the raw name is matched against it
+// case-insensitively, either way round, so "loma" finds "Loma
+// Microfinance Bank" and "Iyin-Ekiti MFB" finds "Iyin-Ekiti Microfinance
+// Bank". When the catalogue cannot be read or has no match, the raw name
+// is tidied (title case, "Bank" appended) and the code is whatever the
+// response carried -- never invented.
+func (c *Client) ResolveBank(ctx context.Context, raw BankRef) (name, code string) {
+	rawName := strings.TrimSpace(raw.Name)
+	if rawName == "" {
+		return "", raw.Code
+	}
+	if c != nil {
+		if banks, err := c.ListBanks(ctx); err == nil {
+			if b, ok := matchBank(banks, rawName, raw.Code); ok {
+				return b.DisplayName(), firstNonEmpty(b.BankCode(), raw.Code)
+			}
+		}
+	}
+	return tidyBankName(rawName), raw.Code
+}
+
+// matchBank finds the catalogue entry for a raw provider name or code.
+//
+// Names are compared as sets of distinctive words -- "Loma Microfinance
+// Bank" is {loma}, "Iyin-Ekiti MFB" is {iyin-ekiti} -- because a substring
+// match finds "loma" inside "Diploma Bank" and a person would then be told to
+// send money to the wrong bank. Equal sets win; otherwise the catalogue entry
+// whose set contains the raw one with the fewest extra words.
+func matchBank(banks []Bank, rawName, rawCode string) (Bank, bool) {
+	// A code the response carried is the least ambiguous handle; try it first.
+	if rawCode != "" {
+		for _, b := range banks {
+			if b.BankCode() == rawCode {
+				return b, true
+			}
+		}
+	}
+	needle := distinctiveWords(rawName)
+	if len(needle) == 0 {
+		return Bank{}, false
+	}
+	var best Bank
+	bestExtra := -1
+	for _, b := range banks {
+		have := distinctiveWords(b.DisplayName())
+		if len(have) == 0 || !subset(needle, have) {
+			continue
+		}
+		extra := len(have) - len(needle)
+		if extra == 0 {
+			return b, true
+		}
+		if bestExtra < 0 || extra < bestExtra {
+			best, bestExtra = b, extra
+		}
+	}
+	return best, bestExtra >= 0
+}
+
+// genericBankWords carry no identity: every microfinance bank has them.
+var genericBankWords = map[string]bool{
+	"bank": true, "banks": true, "microfinance": true, "micro": true, "finance": true,
+	"mfb": true, "plc": true, "ltd": true, "limited": true, "nigeria": true, "the": true,
+	"of": true, "and": true, "&": true,
+}
+
+func distinctiveWords(name string) map[string]bool {
+	out := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(name)) {
+		w = strings.Trim(w, ".,()")
+		if w != "" && !genericBankWords[w] {
+			out[w] = true
+		}
+	}
+	return out
+}
+
+func subset(small, big map[string]bool) bool {
+	for w := range small {
+		if !big[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// tidyBankName is the last resort: "loma" → "Loma Bank",
+// "iyin-ekiti mfb" → "Iyin-Ekiti Mfb".
+func tidyBankName(raw string) string {
+	words := strings.Fields(strings.ToLower(raw))
+	for i, w := range words {
+		parts := strings.Split(w, "-")
+		for j, p := range parts {
+			if p != "" {
+				parts[j] = strings.ToUpper(p[:1]) + p[1:]
+			}
+		}
+		words[i] = strings.Join(parts, "-")
+	}
+	name := strings.Join(words, " ")
+	if !strings.Contains(strings.ToLower(name), "bank") && !strings.Contains(strings.ToLower(name), "mfb") {
+		name += " Bank"
+	}
+	return name
 }
 
 // CreateCustomer opens the permanent wallet (STATIC_FUND: funds remain
@@ -364,9 +721,11 @@ func (c *Client) CreateCustomer(ctx context.Context, req CreateCustomerRequest) 
 
 // WalletBalance reads one customer wallet.
 func (c *Client) WalletBalance(ctx context.Context, walletID string) (decimal.Decimal, error) {
+	// Live Fintava answers {"balance": {"bookedBalance": 100, "availableBalance": 100}};
+	// an older shape put the figures at the top level. Take whichever is there.
 	var out struct {
-		Balance          flexDecimal `json:"balance"`
-		AvailableBalance flexDecimal `json:"availableBalance"`
+		Balance          json.RawMessage `json:"balance"`
+		AvailableBalance flexDecimal     `json:"availableBalance"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/customer/wallet/balance/"+url.PathEscape(walletID), nil, &out); err != nil {
 		return decimal.Zero, err
@@ -374,7 +733,26 @@ func (c *Client) WalletBalance(ctx context.Context, walletID string) (decimal.De
 	if !out.AvailableBalance.IsZero() {
 		return out.AvailableBalance.Decimal, nil
 	}
-	return out.Balance.Decimal, nil
+	if len(out.Balance) > 0 && out.Balance[0] == '{' {
+		var nested struct {
+			Booked    flexDecimal `json:"bookedBalance"`
+			Available flexDecimal `json:"availableBalance"`
+		}
+		if err := json.Unmarshal(out.Balance, &nested); err != nil {
+			return decimal.Zero, fmt.Errorf("fintava: decode wallet balance: %w", err)
+		}
+		if !nested.Available.IsZero() {
+			return nested.Available.Decimal, nil
+		}
+		return nested.Booked.Decimal, nil
+	}
+	var flat flexDecimal
+	if len(out.Balance) > 0 {
+		if err := json.Unmarshal(out.Balance, &flat); err != nil {
+			return decimal.Zero, fmt.Errorf("fintava: decode wallet balance: %w", err)
+		}
+	}
+	return flat.Decimal, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -440,4 +818,11 @@ func (c *Client) VerifyBVNSelfie(ctx context.Context, bvn, imageBase64 string) e
 		"bvn":   bvn,
 		"image": imageBase64,
 	}, nil)
+}
+
+// amountNumber renders a naira amount as the JSON number the rail expects.
+// Kobo precision is two decimals, which float64 carries exactly for any
+// amount this rail will move.
+func amountNumber(d decimal.Decimal) json.Number {
+	return json.Number(d.StringFixed(2))
 }

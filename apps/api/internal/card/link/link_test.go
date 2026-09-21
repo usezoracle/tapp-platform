@@ -85,7 +85,8 @@ func issueCard(t *testing.T, s *Service) string {
 	t.Helper()
 	activation := uuid.NewString()
 	if _, err := s.Pool.Exec(context.Background(),
-		`INSERT INTO tapp_cards (id, activation_token) VALUES (gen_random_uuid(), $1)`,
+		`INSERT INTO tapp_cards (id, created_at, updated_at, activation_token)
+		 VALUES (gen_random_uuid(), now(), now(), $1)`,
 		activation); err != nil {
 		t.Fatalf("issue card: %v", err)
 	}
@@ -96,7 +97,10 @@ func newUser(t *testing.T, s *Service) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	if _, err := s.Pool.Exec(context.Background(),
-		`INSERT INTO users (id, email) VALUES ($1, $2)`, id, id.String()+"@test.local"); err != nil {
+		`INSERT INTO users
+			(id, created_at, updated_at, first_name, last_name, email, password, scope)
+		 VALUES ($1, now(), now(), 'Test', 'User', $2, '', 'user')`,
+		id, id.String()+"@test.local"); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
 	return id

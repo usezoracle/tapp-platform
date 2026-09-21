@@ -7,7 +7,6 @@ package accounts
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	userEnt "github.com/usezoracle/tapp/api/ent/user"
@@ -102,7 +101,11 @@ func (ctrl *AuthController) Login(ctx *gin.Context) {
 
 	// Stateful opaque refresh token — issued in a new family. Revocable
 	// via /auth/logout, rotated on every /auth/refresh.
-	refreshTTL := time.Duration(authConf.JwtRefreshLifespan) * time.Minute
+	// JwtRefreshLifespan is already a Duration. Multiplying it by time.Minute
+	// again overflowed int64 and wrapped to roughly 246 years, so every refresh
+	// token issued was effectively permanent -- one that leaked stayed usable
+	// for as long as the account existed.
+	refreshTTL := authConf.JwtRefreshLifespan
 	issued, err := authSvc.IssueNewFamily(
 		ctx,
 		user.ID,

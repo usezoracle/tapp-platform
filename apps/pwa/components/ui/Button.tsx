@@ -3,38 +3,29 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { PiSpinnerBold } from "react-icons/pi";
 import { cn } from "@/lib/utils";
-import {
-  dangerBtnClasses,
-  ghostBtnClasses,
-  primaryBtnClasses,
-  secondaryBtnClasses,
-} from "./Styles";
+import { btnSizeClasses, btnVariantClasses } from "./Styles";
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+export type ButtonVariant = keyof typeof btnVariantClasses;
+export type ButtonSize = keyof typeof btnSizeClasses;
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
+  size?: ButtonSize;
   loading?: boolean;
   leadingIcon?: ReactNode;
   trailingIcon?: ReactNode;
-  /** Full-width by default — matches zap's mobile-first button blocks. */
+  /** Full-width by default — mobile-first button blocks. */
   fullWidth?: boolean;
 }
 
-const variantClassMap: Record<ButtonVariant, string> = {
-  primary: primaryBtnClasses,
-  secondary: secondaryBtnClasses,
-  ghost: ghostBtnClasses,
-  danger: dangerBtnClasses,
-};
-
 /**
  * CTA primitive. Class strings live in `Styles.ts` so the visual
- * language stays in one place — same pattern paycrest/zap uses.
+ * language stays in one place.
  */
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   {
     variant = "primary",
+    size = "md",
     loading,
     leadingIcon,
     trailingIcon,
@@ -51,16 +42,17 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     <button
       ref={ref}
       disabled={isDisabled}
+      aria-busy={loading || undefined}
       className={cn(
-        variantClassMap[variant],
-        "flex items-center justify-center gap-2",
+        btnVariantClasses[variant],
+        btnSizeClasses[size],
         fullWidth && "w-full",
         className,
       )}
       {...rest}
     >
       {loading ? (
-        <PiSpinnerBold className="animate-spin" size={18} />
+        <PiSpinnerBold className="animate-spin" size={16} />
       ) : (
         <>
           {leadingIcon}

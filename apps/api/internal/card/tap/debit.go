@@ -81,6 +81,9 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 		if err := k.usable(now); err != nil {
 			return err
 		}
+		if err := refuseRepeat(ctx, tx, k.ID, req.MerchantID, req.Amount, now); err != nil {
+			return err
+		}
 
 		// 3. A mismatch is recorded and COMMITTED: the count is what
 		//    eventually locks a cloned card, and rolling it back would mean it
@@ -148,6 +151,32 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 
 		// 7.
 		fee := s.Fee.FeeFor(req.Amount)
+
+		// 7a. Buy the spend, if the balance is held in another currency.
+		//
+		// Exactly the tap amount, and not a unit more: the platform's fee
+		// comes OUT of it -- movements.Tap debits the cardholder the full
+		// amount and pays the merchant amount-minus-fee -- so buying
+		// amount+fee would leave the fee's worth of naira stranded in the
+		// cardholder's account after every single tap.
+		//
+		// In the same transaction as the debit: a conversion that commits
+		// without its tap would leave somebody's dollars exchanged for naira
+		// they never agreed to spend.
+		funding, funded, err := s.fundTap(ctx, tx, *k.Cardholder, req.Amount)
+		if err != nil {
+			if errors.Is(err, movements.ErrInsufficientFunds) {
+				refusal = err
+				return nil
+			}
+			return err
+		}
+		if !funded {
+			refusal = fmt.Errorf("%w: no rate to price %s from %s",
+				ErrCannotPrice, req.Amount, s.Funding)
+			return nil
+		}
+
 		tapID := uuid.New()
 		ledgerTx, err := movements.Tap(ctx, tx, *k.Cardholder, req.MerchantID, req.Amount, fee, tapID)
 		if err != nil {
@@ -163,10 +192,42 @@ func (s *Service) Debit(ctx context.Context, req Request) (*Receipt, error) {
 		// 8.
 		if err := recordTap(ctx, tx, tapRecord{
 			ID: tapID, CardID: k.ID, Cardholder: *k.Cardholder, Merchant: req.MerchantID,
-			Amount: req.Amount, Fee: fee, Tier: challenge.Tier,
-			LedgerTx: ledgerTx, Nonce: req.Nonce,
+			Amount: req.Amount, Fee: fee, Tier: challenge.Tier, Funding: funding,
+			LedgerTx: ledgerTx, Nonce: req.Nonce, At: now,
 		}); err != nil {
 			return err
+		}
+
+		charged := Charged{
+			TapID: tapID, Cardholder: *k.Cardholder, Merchant: req.MerchantID,
+			Amount: req.Amount, Fee: fee, Funding: funding, At: now,
+		}
+
+		// 8a. Note that this tap has to be settled to the merchant.
+		//
+		// Written in the tap's own transaction, so a charge cannot exist
+		// without a record that the merchant still has to be paid. A
+		// settlement row with no tap would pay for a purchase that never
+		// happened; a tap with no settlement row is a merchant who is never
+		// paid, and neither is recoverable by looking at the other. Which
+		// rail pays which part is decided from the funding split, by whoever
+		// wired the hook; this package only reports where the money came
+		// from.
+		if s.Settle != nil {
+			if err := s.Settle(ctx, tx, charged); err != nil {
+				return err
+			}
+		}
+
+		// 8b. And that the market has to hear about it, same transaction,
+		//     same reasoning: a queued delivery with no tap would buy shares
+		//     for a payment that never happened, and a tap with no delivery
+		//     is a cardholder who never receives the shares their spend
+		//     earned. Neither is recoverable from the other.
+		if s.Equity != nil {
+			if err := s.Equity(ctx, tx, charged); err != nil {
+				return err
+			}
 		}
 
 		// 9. The new token is PENDING. It becomes current only when the

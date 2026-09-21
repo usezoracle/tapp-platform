@@ -51,7 +51,15 @@ type Account struct {
 	// virtual accounts return it and it is not optional to the person doing
 	// the transfer: an account number without its bank cannot be paid into.
 	// Rails that do not open accounts leave it empty.
-	BankName      string
+	BankName string
+	// BankCode is the NIP/CBN code of BankName, when the rail could name it.
+	// Empty is honest: a code that was guessed sends money to the wrong bank.
+	BankCode string
+	// WalletID is the rail's handle for reading this account's own balance
+	// (GetAccount), where that differs from ID. Fintava's customer id (ID)
+	// and wallet id are two different strings, and only the second one can
+	// be asked for a balance.
+	WalletID      string
 	Balance       decimal.Decimal
 	LedgerBalance decimal.Decimal
 	Type          string
@@ -151,6 +159,9 @@ type WebhookEvent struct {
 	RawStatus        string
 	Amount           string
 	AccountNumber    string
+	// CustomerID is the rail's id for the credited customer, when the event
+	// carries it; a receiver may match on it when the account number is absent.
+	CustomerID string
 }
 
 // Provider is the BaaS rail contract. An adapter wraps one vendor SDK and
@@ -183,6 +194,90 @@ type Provider interface {
 	WebhookConfigured() bool
 	// ParseWebhook decodes the vendor payload into a neutral event.
 	ParseWebhook(body []byte) (*WebhookEvent, error)
+}
+
+// WalletLocator is implemented by rails that can find an account's balance
+// handle (Account.WalletID) from what a row opened before that handle was
+// recorded still has: the account number, and the email it was opened with.
+//
+// Optional rather than part of Provider: only a rail whose balance handle
+// differs from its account id needs it, and a rail that lacks it simply
+// cannot reconcile rows it did not record a wallet id for.
+type WalletLocator interface {
+	LocateWallet(ctx context.Context, searchTerm, accountNumber string) (walletID string, err error)
+}
+
+// Refusal is implemented by a rail error that can say whether the rail read
+// the request and declined it. A refusal means no money moved and retrying
+// the same request cannot help; anything else -- a timeout, a 5xx, a broken
+// connection -- means nothing is known, and the request may have gone through.
+// A consumer that cannot tell the two apart either pays twice or gives up on
+// a transfer that would have worked.
+type Refusal interface {
+	Refused() bool
+}
+
+// IsRefusal reports whether err is a rail's verdict rather than its absence.
+func IsRefusal(err error) bool {
+	var r Refusal
+	return errors.As(err, &r) && r.Refused()
+}
+
+// WalletTransferRequest pays a bank account out of a CUSTOMER wallet rather
+// than the platform's own account: the cardholder's naira, at the rail, going
+// to the merchant. PaymentReference is the idempotency key, as on
+// TransferRequest.
+type WalletTransferRequest struct {
+	// SourceID is the rail's handle for the wallet being debited. For
+	// Fintava it is the wallet's own id, as its /bank/credit takes.
+	SourceID            string
+	BeneficiaryBankCode string
+	BeneficiaryAccount  string
+	// BeneficiaryName is the name the bank returned for the account when it
+	// was verified. Rails that require it on the request get exactly that.
+	BeneficiaryName  string
+	Amount           decimal.Decimal
+	Narration        string
+	PaymentReference string
+}
+
+// WalletTransferer is implemented by rails whose customer wallets hold their
+// own balance (Fintava's STATIC_FUND wallets) and can pay a bank account out
+// of it. A pooled rail, where deposits land in the platform's account, has no
+// wallet to pay from and does not implement it.
+type WalletTransferer interface {
+	TransferFromWallet(ctx context.Context, req WalletTransferRequest) (*Transfer, error)
+}
+
+// WalletSweepRequest moves money between two accounts AT the rail: from a
+// customer wallet to the platform's own wallet, by their account numbers.
+// PaymentReference is the idempotency key, as on TransferRequest.
+type WalletSweepRequest struct {
+	SenderAccount    string
+	ReceiverAccount  string
+	Amount           decimal.Decimal
+	Narration        string
+	PaymentReference string
+}
+
+// WalletSweeper is implemented by rails that can move money between two of
+// their own wallets, and say which wallet is the platform's. It is how a
+// customer wallet pays a bank on a rail whose direct wallet-to-bank call
+// does not work: the exact amount is swept into the platform's wallet, and
+// the platform's wallet pays the bank (Provider.Transfer). The platform's
+// wallet only ever relays what was just swept; it funds nothing itself.
+type WalletSweeper interface {
+	SweepToPlatform(ctx context.Context, req WalletSweepRequest) (*Transfer, error)
+	// PlatformWalletAccount is the account number sweeps are received on.
+	PlatformWalletAccount(ctx context.Context) (string, error)
+}
+
+// CustomerLocator is WalletLocator's fuller form: it finds both handles a
+// customer wallet has at the rail -- the customer id a transfer is sourced
+// from, and the wallet id a balance is read by -- from what a row opened
+// before either was recorded still has.
+type CustomerLocator interface {
+	LocateCustomer(ctx context.Context, searchTerm, accountNumber string) (customerID, walletID string, err error)
 }
 
 var (

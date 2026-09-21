@@ -183,6 +183,19 @@ func hexPrefix(user uuid.UUID) string {
 	return strings.ReplaceAll(user.String(), "-", "")[:20]
 }
 
+// checksummed renders an address the way CDP addresses its own resources.
+//
+// CDP puts the smart account in the request path and matches it exactly, in
+// EIP-55 mixed case. Our tables store addresses lower-cased -- the watcher
+// matches log topics and deposits join on to_address, and a single canonical
+// case is what makes those comparisons safe -- so every address handed to CDP
+// has to be converted back on the way out. A lower-case one comes back as
+// 404 "EVM smart account with the given address not found", which reads as an
+// account that was never created rather than a spelling difference.
+func checksummed(address string) string {
+	return common.HexToAddress(address).Hex()
+}
+
 // idempotencyKey is stable for a (purpose, subject) pair, so a retried call
 // is the same call to CDP and returns the same result rather than a second
 // account or a second send. Derived, not stored: there is nothing to lose.
@@ -288,6 +301,18 @@ func (c *Client) SweepSmartAccount(
 	if amount == nil || amount.Sign() <= 0 {
 		return "", errors.New("cdp: nothing to sweep")
 	}
+
+	// CDP addresses its smart accounts by the EIP-55 checksummed string and
+	// compares it exactly: the same account in lower case is a 404, "EVM
+	// smart account with the given address not found", which reads as though
+	// the account was never created.
+	//
+	// Our own tables store addresses lower-cased on purpose -- the watcher
+	// matches log topics and deposits join on to_address, and one canonical
+	// case is what makes those comparisons safe. So the conversion belongs
+	// here, at the boundary, rather than in the column.
+	account = checksummed(account)
+
 	data, err := base.PackTransfer(to, amount)
 	if err != nil {
 		return "", err
@@ -312,6 +337,73 @@ func (c *Client) SweepSmartAccount(
 		&openapi.PrepareAndSendUserOperationParams{XWalletAuth: &walletAuth, XIdempotencyKey: &idem},
 		openapi.PrepareAndSendUserOperationJSONRequestBody{
 			Calls:        []openapi.EvmCall{{To: usdc.Hex(), Value: "0", Data: data}},
+			Network:      c.network,
+			PaymasterUrl: &paymaster,
+		})
+	if err != nil {
+		return "", fmt.Errorf("cdp: send user operation: %w", err)
+	}
+	if sent.JSON200 == nil {
+		return "", apiError(sent.StatusCode(), sent.Body)
+	}
+	return c.waitUserOperation(ctx, account, sent.JSON200.UserOpHash)
+}
+
+// Call is one contract call in a user operation.
+//
+// Deliberately generic: the same sponsored path that sweeps a deposit also
+// sells one, and the difference between them is calldata, not machinery.
+type Call struct {
+	To   common.Address
+	Data string // 0x-prefixed hex, as PackTransfer and abi.Pack produce
+}
+
+// SendCalls submits calls from a smart account as one sponsored user
+// operation and returns the transaction hash once it is final.
+//
+// One operation, not several: an approve that lands without the call it was
+// granted for leaves an allowance sitting on a contract, and a call that
+// lands without its approve simply reverts. Atomicity here is what makes
+// "approve then spend" safe to retry.
+//
+// idem must be stable for the operation being attempted, so a retry after a
+// lost response cannot send twice.
+func (c *Client) SendCalls(
+	ctx context.Context, account string, calls []Call, idem string,
+) (string, error) {
+	if len(calls) == 0 {
+		return "", errors.New("cdp: no calls to send")
+	}
+	// CDP addresses smart accounts in EIP-55 and matches exactly; see
+	// checksummed.
+	account = checksummed(account)
+
+	// One slice feeds both the signature and the request, so they cannot
+	// disagree about what is being sent.
+	signed := make([]any, 0, len(calls))
+	typed := make([]openapi.EvmCall, 0, len(calls))
+	for _, call := range calls {
+		to := call.To.Hex()
+		signed = append(signed, map[string]any{"to": to, "value": "0", "data": call.Data})
+		typed = append(typed, openapi.EvmCall{To: to, Value: "0", Data: call.Data})
+	}
+
+	body := map[string]any{
+		"calls":        signed,
+		"network":      string(c.network),
+		"paymasterUrl": c.cfg.PaymasterURL,
+	}
+	path := "/v2/evm/smart-accounts/" + account + "/user-operations/prepare-and-send"
+	walletAuth, err := c.walletJWT(http.MethodPost, path, body)
+	if err != nil {
+		return "", err
+	}
+	paymaster := c.cfg.PaymasterURL
+
+	sent, err := c.api.PrepareAndSendUserOperationWithResponse(ctx, account,
+		&openapi.PrepareAndSendUserOperationParams{XWalletAuth: &walletAuth, XIdempotencyKey: &idem},
+		openapi.PrepareAndSendUserOperationJSONRequestBody{
+			Calls:        typed,
 			Network:      c.network,
 			PaymasterUrl: &paymaster,
 		})
@@ -366,4 +458,24 @@ func (c *Client) waitUserOperation(ctx context.Context, account, userOpHash stri
 		case <-ticker.C:
 		}
 	}
+}
+
+// ProbeSmartAccount reports what CDP holds for a user's deposit account,
+// without creating anything.
+//
+// Diagnostic only. It looks the account up by NAME, which is how creation
+// finds an existing one, so that a failure keyed on the ADDRESS can be told
+// apart from the account genuinely not existing.
+func (c *Client) ProbeSmartAccount(
+	ctx context.Context, user uuid.UUID,
+) (status int, address, name string, err error) {
+	name = depositName(user)
+	found, err := c.api.GetEvmSmartAccountByNameWithResponse(ctx, name)
+	if err != nil {
+		return 0, "", name, fmt.Errorf("cdp: look up smart account %s: %w", name, err)
+	}
+	if found.JSON200 != nil {
+		return found.StatusCode(), found.JSON200.Address, name, nil
+	}
+	return found.StatusCode(), "", name, nil
 }

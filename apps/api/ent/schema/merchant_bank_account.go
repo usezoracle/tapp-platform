@@ -46,6 +46,16 @@ func (MerchantBankAccount) Fields() []ent.Field {
 			NotEmpty(),
 		field.String("account_name").
 			NotEmpty(),
+		// The sort code the naira rail (Fintava) knows this bank by, resolved
+		// from bank_code when the account is saved. bank_code is the
+		// catalogue's institution code ("MONINGPC"); the rail wants its own
+		// ("090405"), and sending it the wrong one fails the payout. Nil when
+		// the save could not resolve it; the settlement worker resolves again
+		// before paying, so this is a cache and a hint for operators, not
+		// the authority.
+		field.String("fintava_bank_code").
+			Optional().
+			Nillable(),
 		// Set when the BaaS / name-resolve API returned a matching name.
 		// Nil means the account passed local validation but hasn't been
 		// re-verified — controllers gate live tap-to-pay on this.

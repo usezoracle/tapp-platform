@@ -118,28 +118,46 @@ func (q *Quoter) Offer(ctx context.Context, sell money.Amount, buy money.Currenc
 		return nil, err
 	}
 
-	// Gross: what the sold amount is worth at the market rate, in the bought
-	// currency's minor units.
+	net, fee, err := priceForward(sell, buy, market.Mid, bps)
+	if err != nil {
+		return nil, err
+	}
+	return q.record(ctx, pair, sell, net, fee, market, bps)
+}
+
+// priceForward values a sale at a rate and takes the spread out of what the
+// buyer receives. The single place this arithmetic lives, so quoting an amount
+// and quoting backwards from a target cannot disagree about it.
+func priceForward(
+	sell money.Amount, buy money.Currency, mid decimal.Decimal, bps int,
+) (net, fee money.Amount, err error) {
 	gross := decimal.NewFromInt(sell.Minor()).
 		Div(decimal.NewFromInt(sell.Currency().Scale())).
-		Mul(market.Mid).
+		Mul(mid).
 		Mul(decimal.NewFromInt(buy.Scale()))
 
 	grossMinor := gross.Round(0).IntPart()
 	if grossMinor <= 0 {
-		return nil, fmt.Errorf("rates: %s is too small to convert to %s", sell, buy)
+		return money.Amount{}, money.Amount{},
+			fmt.Errorf("rates: %s is too small to convert to %s", sell, buy)
 	}
 
 	grossAmount := money.New(grossMinor, buy)
-	fee := money.FeeFor(grossAmount, bps)
-	net, err := grossAmount.Sub(fee)
+	fee = money.FeeFor(grossAmount, bps)
+	net, err = grossAmount.Sub(fee)
 	if err != nil {
-		return nil, err
+		return money.Amount{}, money.Amount{}, err
 	}
 	if !net.IsPositive() {
-		return nil, fmt.Errorf("rates: after a %d basis point spread, %s converts to nothing", bps, sell)
+		return money.Amount{}, money.Amount{},
+			fmt.Errorf("rates: after a %d basis point spread, %s converts to nothing", bps, sell)
 	}
+	return net, fee, nil
+}
 
+func (q *Quoter) record(
+	ctx context.Context, pair Pair, sell, net, fee money.Amount, market *Rate, bps int,
+) (*Quote, error) {
 	quote := &Quote{
 		ID: uuid.New(), Pair: pair,
 		Sell: sell, Buy: net, Fee: fee,
@@ -158,6 +176,82 @@ func (q *Quoter) Offer(ctx context.Context, sell money.Amount, buy money.Currenc
 		return nil, fmt.Errorf("rates: record quote: %w", err)
 	}
 	return quote, nil
+}
+
+// OfferForBuy prices a conversion backwards, from what the buyer must receive.
+//
+// A till knows the naira it has to collect, not the dollars that will pay for
+// it, so Offer's direction is the wrong way round for the one place a
+// conversion actually has to happen. Working backwards has to be exact: a
+// quote that lands a kobo short means the debit that follows it declines for
+// insufficient funds after the card has already been read.
+//
+// The inverse is computed and then priced FORWARD again through the same
+// function Offer uses, and the result checked against the target. That is the
+// only way to be sure the two agree, because both directions round -- and it
+// is the forward number that the ledger will move.
+func (q *Quoter) OfferForBuy(
+	ctx context.Context, sell money.Currency, buy money.Amount,
+) (*Quote, error) {
+	if !buy.IsPositive() {
+		return nil, fmt.Errorf("rates: cannot quote a purchase of %s", buy)
+	}
+	if sell == buy.Currency() {
+		return nil, fmt.Errorf("rates: %s to %s is not a conversion", sell, buy.Currency())
+	}
+	if err := sell.Valid(); err != nil {
+		return nil, err
+	}
+
+	pair := Pair{Base: sell, Quote: buy.Currency()}
+	bps, err := q.Spread.For(pair)
+	if err != nil {
+		return nil, err
+	}
+	market, err := q.Engine.Market(ctx, pair)
+	if err != nil {
+		return nil, err
+	}
+	if market.Mid.Sign() <= 0 {
+		return nil, fmt.Errorf("rates: %s has no usable rate", pair)
+	}
+
+	// Gross the target back up through the spread, then divide by the rate to
+	// get the sale. Ceiling at both steps: rounding down here is what leaves a
+	// quote a minor unit short of what it promised.
+	gross := decimal.NewFromInt(buy.Minor()).
+		Mul(decimal.NewFromInt(10_000)).
+		Div(decimal.NewFromInt(int64(10_000 - bps))).
+		Ceil()
+	sellMinor := gross.
+		Div(decimal.NewFromInt(buy.Currency().Scale())).
+		Div(market.Mid).
+		Mul(decimal.NewFromInt(sell.Scale())).
+		Ceil().
+		IntPart()
+	if sellMinor <= 0 {
+		return nil, fmt.Errorf("rates: %s is too small to price in %s", buy, sell)
+	}
+
+	// Walk up until the forward price covers the target. Bounded, and normally
+	// zero or one step: this only corrects the last minor unit lost to
+	// rounding, and a loop that could run away would be a worse bug than the
+	// kobo it is chasing.
+	const maxNudges = 4
+	for i := 0; ; i++ {
+		sellAmount := money.New(sellMinor+int64(i), sell)
+		net, fee, err := priceForward(sellAmount, buy.Currency(), market.Mid, bps)
+		if err != nil {
+			return nil, err
+		}
+		if net.Minor() >= buy.Minor() {
+			return q.record(ctx, pair, sellAmount, net, fee, market, bps)
+		}
+		if i == maxNudges {
+			return nil, fmt.Errorf(
+				"rates: cannot price %s in %s: %s yields only %s", buy, sell, sellAmount, net)
+		}
+	}
 }
 
 // Redeem claims a quote for execution, exactly once.

@@ -161,6 +161,56 @@ credits posted, in the shape of the existing `tasks/reconcile.go`. A drift is an
 alert, never an automatic correction: on a pooled rail the platform cannot tell
 whose money is unattributed, and guessing would credit the wrong person.
 
+## Operations
+
+Two things the first accounts taught, and the knobs that fix them.
+
+### The bank name
+
+Fintava's create-customer response names the bank as `wallet.serviceProvider`
+(and/or `wallet.bank`) -- e.g. `"loma"` -- never as `bankName`. The first
+decoder read `bankName`, got nothing, and stored the literal
+**"Fintava partner bank"**, which real people were then shown as the bank to
+pay into. Now:
+
+- The adapter decodes `serviceProvider`/`bank` (string or object), resolves it
+  against the rail's bank list to a display name and NIP code ("loma" →
+  "Loma Microfinance Bank" / 090620), and stores both (`bank_name`,
+  `bank_code`; migration `0023_ngn_deposit_bank_code.sql`).
+- `FINTAVA_DEPOSIT_BANK_NAME` / `FINTAVA_DEPOSIT_BANK_CODE` (default empty)
+  are used at provisioning when the response has no bank, and at read time
+  (`GET /v1/deposits/ngn/account`) in place of the placeholder on rows that
+  still carry it. The placeholder is never shown to a person again; with no
+  fallback configured the name comes back blank.
+- `POST /v1/admin/deposits/ngn/accounts/{account_number}/bank` with
+  `{"bank_name": "...", "bank_code": "..."}` corrects a row in place (audited
+  as `ngn_deposit.bank.set`). `GET /v1/admin/deposits/ngn/accounts?email=`
+  finds the row and says whether it `needs_bank_fix`.
+
+### Reconciliation (credits the webhook never delivered)
+
+Fintava sends its webhook to ONE url, and that url was the Zerocard backbone
+until forwarding to this API was deployed. Credits that landed before then
+were never posted here. STATIC_FUND wallets hold what they receive until
+transferred out, and nothing in this codebase transfers out of them, so the
+wallet's balance is the total ever deposited.
+
+`POST /v1/admin/deposits/ngn/accounts/{account_number}/reconcile` (audited as
+`ngn_deposit.reconcile`) reads the wallet balance, sums what the ledger has
+already credited to the owner from source `fintava`, and posts the shortfall
+as one deposit with reference `reconcile:<account>:<balance-kobo>:<date>`.
+Idempotent: a second run finds no shortfall and posts nothing; a balance
+below what was credited is reported in `note` and nothing is posted -- money
+leaving the wallet by a path this system did not record is a question for a
+person, not a debit. Response:
+`{account_number, wallet_balance, credited_before, posted, reference, note, wallet_id}`.
+
+The balance endpoint takes Fintava's *wallet* id, and `rail_ref` holds the
+*customer* id (a different string, and on the live response shape it was not
+even decoded). The wallet id is now stored in `wallet_id`; for rows opened
+before it existed, reconciliation looks the wallet up by the owner's email
+and account number (`GET /customers/list`) and records it.
+
 ## What cannot be tested here
 
 No BaaS rail is configured on this instance — boot logs `BaaS rail (mfb) not

@@ -66,6 +66,17 @@ var (
 	// ErrUIDTaken means this physical chip is already bound to another card
 	// record.
 	ErrUIDTaken = errors.New("link: this card is already registered")
+	// ErrLimitsInvalid means the chosen limits are incoherent or above what
+	// the cardholder's verification supports.
+	//
+	// Wrapped around a specific message rather than replacing it: the caller
+	// needs to say WHICH limit is wrong for the person to fix it, and every
+	// one of these is something they chose and can change. Without a sentinel
+	// these reached the handler as bare errors, fell into its default branch,
+	// and came back as a 500 "Something went wrong setting up your card" --
+	// telling somebody their setup had crashed when in fact they had asked
+	// for a daily limit above their tier.
+	ErrLimitsInvalid = errors.New("link: limits are not acceptable")
 )
 
 // Session is one linking ceremony.
@@ -100,13 +111,18 @@ type Limits struct {
 func (l Limits) Valid(maxDailyMinor int64) error {
 	switch {
 	case l.PerTapMinor <= 0 || l.StepUpMinor <= 0 || l.DailyMinor <= 0:
-		return fmt.Errorf("link: every limit must be set and positive")
+		return fmt.Errorf("%w: every limit must be set and positive", ErrLimitsInvalid)
 	case l.PerTapMinor > l.StepUpMinor:
-		return fmt.Errorf("link: the PIN threshold cannot be above the approval threshold")
+		return fmt.Errorf("%w: the per-tap limit cannot be above the approval threshold", ErrLimitsInvalid)
 	case l.StepUpMinor > l.DailyMinor:
-		return fmt.Errorf("link: the approval threshold cannot be above the daily limit")
+		return fmt.Errorf("%w: the approval threshold cannot be above the daily limit", ErrLimitsInvalid)
 	case l.DailyMinor > maxDailyMinor:
-		return fmt.Errorf("link: the daily limit cannot exceed what your account is verified for")
+		// The ceiling is not named here on purpose: this package takes a bare
+		// minor-unit int64 and does not know the currency or its scale, so it
+		// cannot render "20,000" without guessing. The client knows both, and
+		// bounds its own inputs by the same figure.
+		return fmt.Errorf("%w: the daily limit cannot exceed what your account is verified for",
+			ErrLimitsInvalid)
 	}
 	return nil
 }

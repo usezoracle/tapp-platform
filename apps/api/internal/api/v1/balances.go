@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/shopspring/decimal"
 
@@ -21,6 +22,15 @@ import (
 // BalanceHandler answers what somebody holds.
 type BalanceHandler struct {
 	User func(*gin.Context) (uuid.UUID, bool)
+	// DB is the pool to read from; nil means storage.Pool. Set by tests.
+	DB *pgxpool.Pool
+}
+
+func (h *BalanceHandler) db() *pgxpool.Pool {
+	if h.DB != nil {
+		return h.DB
+	}
+	return storage.Pool
 }
 
 // currencyBalance is one currency's position, split by what it can be used for.
@@ -172,6 +182,20 @@ type activityQuery struct {
 	Cursor string `form:"cursor"`
 }
 
+// activityMovement is a ledger movement as the app sees it: the ledger's own
+// fields, plus who took the money when it was a tap.
+type activityMovement struct {
+	ledger.Movement
+	// Merchant is where the card was spent. Present on tap movements, null on
+	// everything else.
+	Merchant *merchantView `json:"merchant"`
+}
+
+type activityPage struct {
+	Movements  []activityMovement `json:"movements"`
+	NextCursor string             `json:"nextCursor,omitempty"`
+}
+
 // Activity returns the caller's movements, newest first.
 //
 // Derived from the ledger entries themselves, so the feed and the balance
@@ -179,6 +203,9 @@ type activityQuery struct {
 // predecessor read the user's on-chain transaction list from an RPC provider,
 // which described what happened on a chain rather than what happened to their
 // money.
+//
+// Tap movements are then named: one query for the whole page collects the
+// taps' merchants, so a page of thirty taps costs two queries, not thirty-one.
 func (h *BalanceHandler) Activity(ctx *gin.Context) {
 	user, ok := h.User(ctx)
 	if !ok {
@@ -191,7 +218,7 @@ func (h *BalanceHandler) Activity(ctx *gin.Context) {
 		return
 	}
 
-	page, err := ledger.History(ctx.Request.Context(), storage.Pool,
+	page, err := ledger.History(ctx.Request.Context(), h.db(),
 		ledger.User(user), q.Limit, q.Cursor)
 	if err != nil {
 		var bad ledger.ErrBadCursor
@@ -207,5 +234,37 @@ func (h *BalanceHandler) Activity(ctx *gin.Context) {
 		return
 	}
 
-	u.APIResponse(ctx, http.StatusOK, "success", "Activity retrieved", page)
+	out, err := nameTapMerchants(ctx.Request.Context(), h.db(), page)
+	if err != nil {
+		logger.Errorf("activity: %v", err)
+		u.APIResponse(ctx, http.StatusInternalServerError, "error",
+			"We could not read your activity just now.", nil)
+		return
+	}
+	u.APIResponse(ctx, http.StatusOK, "success", "Activity retrieved", out)
+}
+
+// nameTapMerchants decorates a page's tap movements with their merchant.
+func nameTapMerchants(ctx context.Context, q ledger.Querier, page *ledger.Page) (activityPage, error) {
+	var taps []uuid.UUID
+	for _, m := range page.Movements {
+		if m.RefType == "tap" && m.RefID != nil {
+			taps = append(taps, *m.RefID)
+		}
+	}
+	named, err := merchantsOfTaps(ctx, q, taps)
+	if err != nil {
+		return activityPage{}, err
+	}
+	out := activityPage{Movements: make([]activityMovement, 0, len(page.Movements)), NextCursor: page.NextCursor}
+	for _, m := range page.Movements {
+		am := activityMovement{Movement: m}
+		if m.RefType == "tap" && m.RefID != nil {
+			if mv, ok := named[*m.RefID]; ok {
+				am.Merchant = &mv
+			}
+		}
+		out.Movements = append(out.Movements, am)
+	}
+	return out, nil
 }

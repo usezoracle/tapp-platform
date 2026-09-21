@@ -11,7 +11,7 @@ import {
   slideInOut,
 } from "@/components/ui/AnimatedComponents";
 import { useSession } from "@/lib/auth";
-import { cardsApi } from "@/lib/api";
+import { cardsApi, kycApi } from "@/lib/api";
 import { useLinkStore } from "@/lib/cardLinkStore";
 import { formatNgn } from "@/lib/utils";
 
@@ -23,11 +23,22 @@ export default function LinkConfigurePage() {
   );
 }
 
+// Opening positions only. Every one of them is clamped to what the holder's
+// verification actually allows once the tier loads -- the daily default used
+// to be 40,000 against an unverified ceiling of 20,000, so an untouched form
+// was rejected by the server, and the rejection arrived as "Something went
+// wrong setting up your card".
 const DEFAULTS = {
   dailyNGN:    40_000,
   perTapNGN:   2_000,
   stepUpNGN:   15_000,
 };
+
+// Shown until the real ceiling arrives. Deliberately the lowest tier's daily
+// limit rather than the highest: if the tier never loads, offering more than
+// somebody can have produces a rejection, while offering less produces a
+// working card with a modest limit they can raise.
+const FALLBACK_DAILY_MAX_NGN = 20_000;
 
 function Body() {
   const router = useRouter();
@@ -38,12 +49,25 @@ function Body() {
   const setLinkSession = useLinkStore((s) => s.setSession);
   const setLimits = useLinkStore((s) => s.setLimits);
 
-  const [daily, setDaily] = useState(DEFAULTS.dailyNGN);
-  const [perTap, setPerTap] = useState(DEFAULTS.perTapNGN);
-  const [stepUp, setStepUp] = useState(DEFAULTS.stepUpNGN);
+  // Clamped at the first render, not just once the tier arrives. A range
+  // input whose value exceeds its max pins the thumb visually but leaves the
+  // state untouched, so an unclamped default would sit at 40,000 behind a
+  // slider that appears to read 20,000 -- and submit the number nobody saw.
+  const [daily, setDaily] = useState(
+    Math.min(DEFAULTS.dailyNGN, FALLBACK_DAILY_MAX_NGN),
+  );
+  const [perTap, setPerTap] = useState(
+    Math.min(DEFAULTS.perTapNGN, FALLBACK_DAILY_MAX_NGN),
+  );
+  const [stepUp, setStepUp] = useState(
+    Math.min(DEFAULTS.stepUpNGN, FALLBACK_DAILY_MAX_NGN),
+  );
   const [pin, setPin] = useState("");
   const [pinConfirm, setPinConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [dailyMaxNGN, setDailyMaxNGN] = useState(FALLBACK_DAILY_MAX_NGN);
+  const [tierName, setTierName] = useState<string | null>(null);
+  const [canVerifyFurther, setCanVerifyFurther] = useState(false);
 
   useEffect(() => {
     if (!cardId || !sessionId) router.replace("/");
@@ -78,6 +102,41 @@ function Body() {
     };
   }, [session, router]);
 
+  // The ceiling comes from the server, not from a table in here.
+  //
+  // The limits a tier allows are a policy decision that changes without this
+  // bundle being rebuilt, and a client that keeps its own copy will one day
+  // offer a number the server refuses -- which is exactly the failure this
+  // replaces. GET /v1/kyc already returns the daily limit for the holder's
+  // tier, so ask.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    kycApi
+      .status(session.jwt)
+      .then((k) => {
+        if (cancelled) return;
+        const maxNGN = Math.floor((k.limits?.daily?.minor ?? 0) / 100);
+        if (maxNGN > 0) {
+          setDailyMaxNGN(maxNGN);
+          // Pull the chosen values under the ceiling, preserving the ordering
+          // the server also enforces: per-tap <= step-up <= daily.
+          setDaily((d) => Math.min(d, maxNGN));
+          setStepUp((s) => Math.min(s, maxNGN));
+          setPerTap((p) => Math.min(p, maxNGN));
+        }
+        setTierName(k.tier_name ?? null);
+        setCanVerifyFurther(Boolean(k.next));
+      })
+      .catch(() => {
+        // Leave the conservative fallback in place. A card set up with a low
+        // limit is recoverable; one the server rejects is a dead end.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
   function submit() {
     if (pin.length !== 4 || !/^\d{4}$/.test(pin)) {
       setError("PIN must be 4 digits.");
@@ -89,6 +148,12 @@ function Body() {
     }
     if (perTap > stepUp || stepUp > daily) {
       setError("Limits must satisfy: per-tap ≤ step-up ≤ daily.");
+      return;
+    }
+    if (daily > dailyMaxNGN) {
+      setError(
+        `Your daily limit can be at most ${formatNgn(dailyMaxNGN)} at your current verification level.`,
+      );
       return;
     }
     setError(null);
@@ -114,21 +179,30 @@ function Body() {
         <div className="grid divide-y divide-dashed divide-gray-200 rounded-3xl border border-gray-200 px-4 transition-all dark:divide-white/10 dark:border-white/10">
           <RangeField
             label="Daily limit"
-            help="Max total spend per UTC day"
+            help={
+              tierName
+                ? `Max total spend per UTC day — up to ${formatNgn(dailyMaxNGN)} on ${tierName}`
+                : "Max total spend per UTC day"
+            }
             value={daily}
             onChange={setDaily}
-            min={5_000}
-            max={200_000}
+            min={Math.min(5_000, dailyMaxNGN)}
+            max={dailyMaxNGN}
             step={5_000}
             display={formatNgn(daily)}
           />
+          {/* Each slider is capped by the one above it, so the ordering the
+              server enforces -- per-tap <= step-up <= daily -- cannot be
+              violated by dragging. The step-up ceiling used to be a fixed
+              50,000, which on an unverified account is more than twice the
+              whole daily allowance. */}
           <RangeField
             label="Per-tap limit"
             help="Taps below this need no PIN"
             value={perTap}
             onChange={setPerTap}
             min={500}
-            max={5_000}
+            max={Math.max(500, Math.min(5_000, stepUp))}
             step={500}
             display={formatNgn(perTap)}
           />
@@ -137,12 +211,18 @@ function Body() {
             help="Above this needs a biometric on your phone"
             value={stepUp}
             onChange={setStepUp}
-            min={5_000}
-            max={50_000}
+            min={Math.min(5_000, daily)}
+            max={Math.min(50_000, daily)}
             step={1_000}
             display={formatNgn(stepUp)}
           />
         </div>
+
+        {canVerifyFurther && (
+          <p className="text-xs text-gray-500 dark:text-white/40">
+            Verify your identity in Settings to raise these limits.
+          </p>
+        )}
 
         <div className="grid gap-4 rounded-3xl border border-gray-200 p-4 dark:border-white/10">
           <PinInput label="Choose a 4-digit PIN" value={pin} onChange={setPin} />

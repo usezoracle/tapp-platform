@@ -30,7 +30,7 @@ export default function PayPage() {
     setScanning(false);
     const id = extractCheckoutId(text);
     if (!id) {
-      setError("That QR isn't a Tapp payment request. Try again.");
+      setError("That QR isn't a Freedom payment request. Try again.");
       return;
     }
     router.replace(`/pay/${encodeURIComponent(id)}`);
@@ -40,7 +40,7 @@ export default function PayPage() {
     if (!manual.trim()) return;
     const id = extractCheckoutId(manual.trim());
     if (!id) {
-      setError("Couldn't read that link. Paste a Tapp payment link.");
+      setError("Couldn't read that link. Paste a Freedom payment link.");
       return;
     }
     router.replace(`/pay/${encodeURIComponent(id)}`);

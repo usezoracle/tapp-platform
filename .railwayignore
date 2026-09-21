@@ -1,0 +1,23 @@
+# What `railway up` must not upload.
+#
+# The image is built from apps/api only (see /Dockerfile), so everything here
+# is either build input the Dockerfile never reads or bulk that makes the
+# upload time out -- a 1.5GB apps/pwa.zip did exactly that.
+.git
+.github
+.vercel
+.vscode
+.idea
+node_modules
+**/node_modules
+apps/pwa
+apps/merchant
+packages
+docs
+*.zip
+*.md
+apps/api/.env
+apps/api/cdp-reissue
+apps/api/unsweep
+apps/business
+**/.next

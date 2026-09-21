@@ -21,7 +21,6 @@ package accounts
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/api/idtoken"
@@ -250,7 +249,11 @@ func (ctrl *AuthController) GoogleAuth(ctx *gin.Context) {
 			"Failed to mint session", nil)
 		return
 	}
-	refreshTTL := time.Duration(authConf.JwtRefreshLifespan) * time.Minute
+	// JwtRefreshLifespan is already a Duration. Multiplying it by time.Minute
+	// again overflowed int64 and wrapped to roughly 246 years, so every refresh
+	// token issued was effectively permanent -- one that leaked stayed usable
+	// for as long as the account existed.
+	refreshTTL := authConf.JwtRefreshLifespan
 	issued, err := authSvc.IssueNewFamily(
 		ctx,
 		user.ID,

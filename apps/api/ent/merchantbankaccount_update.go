@@ -90,6 +90,26 @@ func (mbau *MerchantBankAccountUpdate) SetNillableAccountName(s *string) *Mercha
 	return mbau
 }
 
+// SetFintavaBankCode sets the "fintava_bank_code" field.
+func (mbau *MerchantBankAccountUpdate) SetFintavaBankCode(s string) *MerchantBankAccountUpdate {
+	mbau.mutation.SetFintavaBankCode(s)
+	return mbau
+}
+
+// SetNillableFintavaBankCode sets the "fintava_bank_code" field if the given value is not nil.
+func (mbau *MerchantBankAccountUpdate) SetNillableFintavaBankCode(s *string) *MerchantBankAccountUpdate {
+	if s != nil {
+		mbau.SetFintavaBankCode(*s)
+	}
+	return mbau
+}
+
+// ClearFintavaBankCode clears the value of the "fintava_bank_code" field.
+func (mbau *MerchantBankAccountUpdate) ClearFintavaBankCode() *MerchantBankAccountUpdate {
+	mbau.mutation.ClearFintavaBankCode()
+	return mbau
+}
+
 // SetVerifiedAt sets the "verified_at" field.
 func (mbau *MerchantBankAccountUpdate) SetVerifiedAt(t time.Time) *MerchantBankAccountUpdate {
 	mbau.mutation.SetVerifiedAt(t)
@@ -206,6 +226,12 @@ func (mbau *MerchantBankAccountUpdate) sqlSave(ctx context.Context) (n int, err 
 	if value, ok := mbau.mutation.AccountName(); ok {
 		_spec.SetField(merchantbankaccount.FieldAccountName, field.TypeString, value)
 	}
+	if value, ok := mbau.mutation.FintavaBankCode(); ok {
+		_spec.SetField(merchantbankaccount.FieldFintavaBankCode, field.TypeString, value)
+	}
+	if mbau.mutation.FintavaBankCodeCleared() {
+		_spec.ClearField(merchantbankaccount.FieldFintavaBankCode, field.TypeString)
+	}
 	if value, ok := mbau.mutation.VerifiedAt(); ok {
 		_spec.SetField(merchantbankaccount.FieldVerifiedAt, field.TypeTime, value)
 	}
@@ -291,6 +317,26 @@ func (mbauo *MerchantBankAccountUpdateOne) SetNillableAccountName(s *string) *Me
 	if s != nil {
 		mbauo.SetAccountName(*s)
 	}
+	return mbauo
+}
+
+// SetFintavaBankCode sets the "fintava_bank_code" field.
+func (mbauo *MerchantBankAccountUpdateOne) SetFintavaBankCode(s string) *MerchantBankAccountUpdateOne {
+	mbauo.mutation.SetFintavaBankCode(s)
+	return mbauo
+}
+
+// SetNillableFintavaBankCode sets the "fintava_bank_code" field if the given value is not nil.
+func (mbauo *MerchantBankAccountUpdateOne) SetNillableFintavaBankCode(s *string) *MerchantBankAccountUpdateOne {
+	if s != nil {
+		mbauo.SetFintavaBankCode(*s)
+	}
+	return mbauo
+}
+
+// ClearFintavaBankCode clears the value of the "fintava_bank_code" field.
+func (mbauo *MerchantBankAccountUpdateOne) ClearFintavaBankCode() *MerchantBankAccountUpdateOne {
+	mbauo.mutation.ClearFintavaBankCode()
 	return mbauo
 }
 
@@ -439,6 +485,12 @@ func (mbauo *MerchantBankAccountUpdateOne) sqlSave(ctx context.Context) (_node *
 	}
 	if value, ok := mbauo.mutation.AccountName(); ok {
 		_spec.SetField(merchantbankaccount.FieldAccountName, field.TypeString, value)
+	}
+	if value, ok := mbauo.mutation.FintavaBankCode(); ok {
+		_spec.SetField(merchantbankaccount.FieldFintavaBankCode, field.TypeString, value)
+	}
+	if mbauo.mutation.FintavaBankCodeCleared() {
+		_spec.ClearField(merchantbankaccount.FieldFintavaBankCode, field.TypeString)
 	}
 	if value, ok := mbauo.mutation.VerifiedAt(); ok {
 		_spec.SetField(merchantbankaccount.FieldVerifiedAt, field.TypeTime, value)

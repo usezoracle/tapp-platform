@@ -19,6 +19,12 @@ import (
 // the funds are left to accumulate rather than burned moving them. One dollar.
 const MinSweepMicro = 1_000_000
 
+// sweepKeyVersion namespaces the idempotency keys sent to CDP.
+//
+// 2: the smart account is addressed in EIP-55 case. Keys minted under 1 were
+// bound by CDP to the lower-case request and answer anything else with a 422.
+const sweepKeyVersion = 2
+
 // Sweeper moves credited deposits from derived addresses into the treasury.
 //
 // Pooling is the point: one key protects everything, rather than one key per
@@ -146,8 +152,22 @@ func (s *Sweeper) sweepSmartAccount(ctx context.Context, depositID uuid.UUID, ac
 
 	// The deposit id is the idempotency key: a retry after a lost response
 	// is the same operation to CDP, not a second send of the same funds.
+	//
+	// The version prefix exists because CDP binds a key to the exact request
+	// it first saw, and answers the same key with a different request 422
+	// rather than replaying it. When the request shape changes -- as it did
+	// when the smart account started being addressed in EIP-55 case -- every
+	// key minted under the old shape is permanently unusable, and the deposit
+	// it belongs to can never be swept. Bumping the version retires those
+	// keys deliberately instead of stranding the money behind them.
+	//
+	// Only bump this when the request genuinely changes. It is safe here
+	// because no operation under sweepKeyVersion 1 ever reached CDP: they
+	// failed at account lookup, so nothing was sent and nothing can be
+	// double-sent by asking again under a new key.
+	idem := fmt.Sprintf("sweep:v%d:%s", sweepKeyVersion, depositID)
 	txHash, err := s.SmartAccounts.SweepSmartAccount(ctx, account, s.Chain.USDC, s.Chain.Treasury,
-		balance, "sweep:"+depositID.String())
+		balance, idem)
 	if err != nil {
 		_, e := s.Pool.Exec(ctx,
 			`UPDATE base_deposits SET last_error = $2 WHERE id = $1`, depositID, err.Error())

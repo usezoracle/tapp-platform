@@ -306,6 +306,7 @@ var (
 		{Name: "bank_code", Type: field.TypeString},
 		{Name: "account_number", Type: field.TypeString},
 		{Name: "account_name", Type: field.TypeString},
+		{Name: "fintava_bank_code", Type: field.TypeString, Nullable: true},
 		{Name: "verified_at", Type: field.TypeTime, Nullable: true},
 		{Name: "sender_profile_merchant_bank_account", Type: field.TypeUUID, Unique: true},
 	}
@@ -317,7 +318,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "merchant_bank_accounts_sender_profiles_merchant_bank_account",
-				Columns:    []*schema.Column{MerchantBankAccountsColumns[8]},
+				Columns:    []*schema.Column{MerchantBankAccountsColumns[9]},
 				RefColumns: []*schema.Column{SenderProfilesColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -326,7 +327,7 @@ var (
 			{
 				Name:    "merchantbankaccount_sender_profile_merchant_bank_account",
 				Unique:  true,
-				Columns: []*schema.Column{MerchantBankAccountsColumns[8]},
+				Columns: []*schema.Column{MerchantBankAccountsColumns[9]},
 			},
 		},
 	}

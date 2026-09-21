@@ -261,3 +261,26 @@ func TestWalletJWTBodyMatchesWhatTheClientSends(t *testing.T) {
 		t.Fatalf("owner body drifts from what is signed:\n sent:   %s\n signed: %s", got, want)
 	}
 }
+
+// A sweep of $1.50 sat unswept because the address in the request path was
+// lower case. CDP holds the same account as
+// 0xB779226EE0F345b42681B981337205C918AF8c3c and answers a lower-case path
+// with 404 "EVM smart account with the given address not found" -- which
+// looks like an account that does not exist, not a spelling difference.
+//
+// Our own columns are lower case by design, so this conversion is the only
+// thing standing between the two conventions.
+func TestAddressesHandedToCDPAreChecksummed(t *testing.T) {
+	const (
+		stored = "0xb779226ee0f345b42681b981337205c918af8c3c"
+		atCDP  = "0xB779226EE0F345b42681B981337205C918AF8c3c"
+	)
+	if got := checksummed(stored); got != atCDP {
+		t.Fatalf("stored address not rendered as CDP holds it:\n got:  %s\n want: %s", got, atCDP)
+	}
+	// Already-checksummed input must survive untouched, so a caller that
+	// happens to hold the mixed-case form is not corrupted by normalising.
+	if got := checksummed(atCDP); got != atCDP {
+		t.Fatalf("checksummed address changed: %s", got)
+	}
+}

@@ -3,6 +3,7 @@ package v1
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -205,6 +206,15 @@ func writeLinkError(ctx *gin.Context, err error) {
 	case errors.Is(err, link.ErrWrongState):
 		u.APIResponse(ctx, http.StatusConflict, "error", err.Error(),
 			map[string]any{"code": "wrong_step"})
+	case errors.Is(err, link.ErrLimitsInvalid):
+		// The person chose these and can change them, so say which one is
+		// wrong and let them. This used to reach the default branch below and
+		// come back as a 500 "Something went wrong setting up your card",
+		// which reads as "the system broke" -- so the one person who could fix
+		// it was the one person not told what was wrong.
+		u.APIResponse(ctx, http.StatusBadRequest, "error",
+			strings.TrimPrefix(err.Error(), "link: "),
+			map[string]any{"code": "limits_invalid"})
 	default:
 		logger.Errorf("link: %v", err)
 		u.APIResponse(ctx, http.StatusInternalServerError, "error",

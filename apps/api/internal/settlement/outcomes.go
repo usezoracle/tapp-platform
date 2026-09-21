@@ -225,6 +225,17 @@ func (w *Worker) Run(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// PayMerchants is deliberately NOT called here.
+			//
+			// Card taps are settled on chain now: the cardholder's own USDC
+			// is sold to the settlement gateway and a liquidity provider pays
+			// the merchant's bank, so the platform never holds their money.
+			// Draining merchant_payable through a bank rail as well would pay
+			// the same tap twice -- once by the provider and once by us.
+			//
+			// It remains for a deployment that settles merchants from a float
+			// instead, which is a different arrangement with different
+			// custody, not a fallback for this one.
 			submitted, chased, err := w.Tick(ctx)
 			if err != nil {
 				if !errors.Is(err, ErrNoRail) {

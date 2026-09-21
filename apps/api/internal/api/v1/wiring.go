@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/usezoracle/tapp/api/internal/rates"
+	"github.com/usezoracle/tapp/api/internal/rates/ratescfg"
 	"github.com/usezoracle/tapp/api/storage"
 	u "github.com/usezoracle/tapp/api/utils"
 	"github.com/usezoracle/tapp/api/utils/logger"
@@ -19,7 +20,7 @@ import (
 // never price anything answers every request with a 503, which reads as an
 // outage rather than as a feature that was never switched on.
 func NewConvertHandler() *ConvertHandler {
-	engine, spread, err := configureRates()
+	engine, spread, err := ratescfg.FromEnv()
 	if err != nil {
 		logger.Errorf("rates: %v -- currency conversion is not available", err)
 		return nil
@@ -70,7 +71,7 @@ func SharedQuoter() *rates.Quoter {
 	if sharedQuoter != nil {
 		return sharedQuoter
 	}
-	engine, spread, err := configureRates()
+	engine, spread, err := ratescfg.FromEnv()
 	if err != nil || len(engine.Sources) == 0 || len(spread) == 0 {
 		return nil
 	}

@@ -41,6 +41,9 @@ const erc20ABI = `[
             {"name":"value","type":"uint256"},{"name":"deadline","type":"uint256"},
             {"name":"v","type":"uint8"},{"name":"r","type":"bytes32"},{"name":"s","type":"bytes32"}],
   "outputs":[]},
+ {"name":"approve","type":"function","stateMutability":"nonpayable",
+  "inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],
+  "outputs":[{"name":"","type":"bool"}]},
  {"name":"transferFrom","type":"function","stateMutability":"nonpayable",
   "inputs":[{"name":"from","type":"address"},{"name":"to","type":"address"},
             {"name":"amount","type":"uint256"}],
@@ -211,6 +214,19 @@ func PackTransfer(to common.Address, amount *big.Int) (string, error) {
 	data, err := parsedERC20.Pack("transfer", to, amount)
 	if err != nil {
 		return "", fmt.Errorf("base: pack transfer: %w", err)
+	}
+	return "0x" + common.Bytes2Hex(data), nil
+}
+
+// PackApprove builds approve(spender, amount) calldata.
+//
+// Needed because the offramp Gateway pulls the tokens itself rather than
+// being sent them: the allowance and the call that consumes it travel
+// together in one sponsored operation, so no allowance is ever left standing.
+func PackApprove(spender common.Address, amount *big.Int) (string, error) {
+	data, err := parsedERC20.Pack("approve", spender, amount)
+	if err != nil {
+		return "", fmt.Errorf("base: pack approve: %w", err)
 	}
 	return "0x" + common.Bytes2Hex(data), nil
 }

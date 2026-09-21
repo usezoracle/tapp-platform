@@ -46,10 +46,13 @@ func trustedProxyCIDRs(raw string) []string {
 // ADMIN_BASE_URL must mean "no admin origin"; it must never become an ""
 // entry that some later refactor reads as a wildcard.
 func allowedOrigins(conf *config.ServerConfiguration) []string {
-	configured := []string{conf.PWABaseURL, conf.CheckoutBaseURL, conf.AdminBaseURL}
+	configured := []string{conf.PWABaseURL, conf.CheckoutBaseURL, conf.AdminBaseURL, conf.BusinessBaseURL}
+	// ExtraOrigins keeps a front end's old address answering while it moves
+	// to a new one (the *.vercel.app names behind freedomnetwork.xyz).
+	configured = append(configured, strings.Split(conf.ExtraOrigins, ",")...)
 	origins := make([]string, 0, len(configured)+4)
 	for _, o := range configured {
-		if strings.TrimSpace(o) != "" {
+		if o = strings.TrimRight(strings.TrimSpace(o), "/"); o != "" {
 			origins = append(origins, o)
 		}
 	}

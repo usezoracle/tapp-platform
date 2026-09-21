@@ -20,14 +20,18 @@ import { cn } from "@/lib/utils";
 type Kind = "raised" | "sunken" | "outline";
 
 const KINDS: Record<Kind, string> = {
-  raised: "bg-[var(--raised)] border border-[var(--line)]",
-  sunken: "bg-[var(--sunken)] border border-transparent",
-  outline: "bg-transparent border border-[var(--line)]",
+  raised: "bg-raised border border-line",
+  sunken: "bg-sunken border border-transparent",
+  outline: "bg-transparent border border-line",
 };
 
 // Written out rather than interpolated. Tailwind generates CSS by scanning
 // source text for complete class names, so `rounded-${radius}` produces no
 // rule at all -- the component renders with square corners and nothing warns.
+//
+// The three steps all resolve to 12px (see the radius scale in globals.css):
+// the prop survives for the call sites that pass it, the corners no longer
+// vary from one card to the next.
 const RADII = {
   xl: "rounded-xl",
   "2xl": "rounded-2xl",
@@ -85,10 +89,8 @@ export function SectionLabel({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-center justify-between px-1", className)}>
-      <h2 className="text-xs font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
-        {children}
-      </h2>
+    <div className={cn("flex h-5 items-center justify-between", className)}>
+      <h2 className="eyebrow">{children}</h2>
       {action}
     </div>
   );
@@ -113,13 +115,13 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <Surface kind="sunken" radius="3xl" className="grid justify-items-center gap-2 py-10 text-center">
-      {icon ? <span className="text-3xl text-[var(--fg-subtle)]">{icon}</span> : null}
-      <p className="text-sm font-medium text-[var(--fg)]">{title}</p>
+    <div className="panel grid gap-1 px-4 py-5">
+      {icon ? <span className="mb-1 text-fg-subtle [&>svg]:size-5">{icon}</span> : null}
+      <p className="text-sm font-medium text-fg">{title}</p>
       {children ? (
-        <p className="max-w-[24ch] text-xs leading-relaxed text-[var(--fg-muted)]">{children}</p>
+        <p className="text-[13px] leading-5 text-fg-muted">{children}</p>
       ) : null}
       {action ? <div className="mt-2">{action}</div> : null}
-    </Surface>
+    </div>
   );
 }

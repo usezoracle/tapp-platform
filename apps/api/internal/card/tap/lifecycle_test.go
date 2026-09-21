@@ -222,9 +222,11 @@ func TestConcurrentTapsCannotOverdrawTheCard(t *testing.T) {
 		switch {
 		case err == nil:
 			charged++
-		case errors.Is(err, movements.ErrInsufficientFunds), errors.Is(err, ErrTokenStale):
-			// Either refusal is correct: the balance ran out, or the card's
-			// token moved on under a concurrent tap.
+		case errors.Is(err, movements.ErrInsufficientFunds), errors.Is(err, ErrTokenStale),
+			errors.Is(err, ErrRepeatTap):
+			// Any of these refusals is correct: the balance ran out, the
+			// card's token moved on under a concurrent tap, or the same
+			// amount had just been taken from this card at this till.
 		default:
 			t.Errorf("unexpected failure: %v", err)
 		}

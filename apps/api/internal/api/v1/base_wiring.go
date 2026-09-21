@@ -105,9 +105,19 @@ func NewBaseRail(ctx context.Context) (*BaseRail, error) {
 		logger.Infof("base: CDP is not configured -- existing deposit addresses still " +
 			"credit and sweep, but no new address can be issued")
 	}
+	// Deposits are credited in the currency they arrive as: USDC is dollars,
+	// so balances are dollars. Converting on the way in would put the platform
+	// long naira from the moment somebody deposited, for money they might
+	// never spend. The exchange happens where the spending does -- at the
+	// till, for the amount actually being spent -- and balances are shown in
+	// naira at the live rate without being held in it.
 	deposits := &base.Deposits{
 		Pool: storage.Pool, Addresses: addresses,
 		Confirmations: uint64(viper.GetInt("BASE_CONFIRMATIONS")),
+		// So money returned from the treasury, or refunded by the settlement
+		// gateway, is not credited as a fresh deposit. See Deposits.Record.
+		Treasury: chain.Treasury,
+		Gateway:  common.HexToAddress(viper.GetString("BASE_GATEWAY_CONTRACT")),
 	}
 
 	if !chain.CanSend() {
@@ -149,8 +159,17 @@ func NewBaseRail(ctx context.Context) (*BaseRail, error) {
 			Deposits:   deposits,
 			StartBlock: uint64(viper.GetInt64("BASE_START_BLOCK")),
 		},
-		Sweeper:     sweeper,
-		Withdrawals: &base.Withdrawals{Pool: storage.Pool, Chain: chain},
+		Sweeper: sweeper,
+		// Paid from the person's own deposit address, sponsored, because
+		// nothing is swept into the treasury any more. Addresses and
+		// SmartAccounts come from the same objects the deposit side uses, so
+		// a withdrawal cannot disagree with a deposit about where somebody's
+		// money is.
+		Withdrawals: &base.Withdrawals{
+			Pool: storage.Pool, Chain: chain,
+			Addresses:     addresses,
+			SmartAccounts: smart,
+		},
 	}, nil
 }
 

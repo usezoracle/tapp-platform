@@ -31,6 +31,8 @@ type MerchantBankAccount struct {
 	AccountNumber string `json:"account_number,omitempty"`
 	// AccountName holds the value of the "account_name" field.
 	AccountName string `json:"account_name,omitempty"`
+	// FintavaBankCode holds the value of the "fintava_bank_code" field.
+	FintavaBankCode *string `json:"fintava_bank_code,omitempty"`
 	// VerifiedAt holds the value of the "verified_at" field.
 	VerifiedAt *time.Time `json:"verified_at,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
@@ -65,7 +67,7 @@ func (*MerchantBankAccount) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case merchantbankaccount.FieldCurrency, merchantbankaccount.FieldBankCode, merchantbankaccount.FieldAccountNumber, merchantbankaccount.FieldAccountName:
+		case merchantbankaccount.FieldCurrency, merchantbankaccount.FieldBankCode, merchantbankaccount.FieldAccountNumber, merchantbankaccount.FieldAccountName, merchantbankaccount.FieldFintavaBankCode:
 			values[i] = new(sql.NullString)
 		case merchantbankaccount.FieldCreatedAt, merchantbankaccount.FieldUpdatedAt, merchantbankaccount.FieldVerifiedAt:
 			values[i] = new(sql.NullTime)
@@ -129,6 +131,13 @@ func (mba *MerchantBankAccount) assignValues(columns []string, values []any) err
 				return fmt.Errorf("unexpected type %T for field account_name", values[i])
 			} else if value.Valid {
 				mba.AccountName = value.String
+			}
+		case merchantbankaccount.FieldFintavaBankCode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field fintava_bank_code", values[i])
+			} else if value.Valid {
+				mba.FintavaBankCode = new(string)
+				*mba.FintavaBankCode = value.String
 			}
 		case merchantbankaccount.FieldVerifiedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -202,6 +211,11 @@ func (mba *MerchantBankAccount) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("account_name=")
 	builder.WriteString(mba.AccountName)
+	builder.WriteString(", ")
+	if v := mba.FintavaBankCode; v != nil {
+		builder.WriteString("fintava_bank_code=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	if v := mba.VerifiedAt; v != nil {
 		builder.WriteString("verified_at=")

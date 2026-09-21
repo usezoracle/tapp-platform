@@ -14,3 +14,6 @@ docs
 apps/api/.env
 apps/api/Dockerfile.prod
 apps/api/cdp-reissue
+
+# Archives dropped in the tree (e.g. apps/pwa.zip) are never build input.
+*.zip

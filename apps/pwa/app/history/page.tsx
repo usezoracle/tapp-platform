@@ -1,20 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { PiWarningOctagonFill } from "react-icons/pi";
+import { PiWarningBold } from "react-icons/pi";
 import { Screen } from "@/components/ui/Screen";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { InfoBanner } from "@/components/ui/InfoBanner";
-import { Surface, EmptyState } from "@/components/ui/Surface";
-import { MovementList } from "@/components/ui/MovementList";
-import {
-  AnimatedComponent,
-  slideInOut,
-} from "@/components/ui/AnimatedComponents";
+import { EmptyState } from "@/components/ui/Surface";
+import { MovementList, mergeFeed } from "@/components/ui/MovementList";
+import { SkeletonRows } from "@/components/ui/Skeleton";
+import { AnimatedComponent, slideInOut } from "@/components/ui/AnimatedComponents";
+import { stackClasses } from "@/components/ui/Styles";
+import { cn } from "@/lib/utils";
 import { useSession } from "@/lib/auth";
 import { request, type Movement } from "@/lib/api";
+import { useEquityActivity } from "@/lib/holdings";
 
 interface Page {
   movements: Movement[];
@@ -54,58 +56,67 @@ export default function HistoryPage() {
     },
   });
 
-  const movements = (pages.data ?? []).flatMap((p) => p.movements);
+  const equity = useEquityActivity(200);
+
+  const movements = useMemo(() => (pages.data ?? []).flatMap((p) => p.movements), [pages.data]);
+  const feed = useMemo(() => mergeFeed(movements, equity.data?.activity), [movements, equity.data]);
   const next = pages.data?.[pages.data.length - 1]?.nextCursor;
 
   if (!hydrated || !session) return <Screen />;
 
+  // What is listed, not what the ledger holds: the conversions that funded
+  // a tap are folded into it (see `withoutTapFunding`), and a count that
+  // exceeds the rows would send somebody looking for what is missing.
+  const count = feed.filter((f) => f.kind === "movement").length;
+
   return (
     <Screen>
-      <AnimatedComponent variant={slideInOut} className="grid gap-5 py-8">
-        <header className="grid gap-1">
-          <h1 className="text-xl font-medium text-[var(--fg)]">Activity</h1>
-          <p className="text-sm leading-relaxed text-[var(--fg-muted)]">
-            Every movement of your money, in and out.
-          </p>
-        </header>
+      <AnimatedComponent variant={slideInOut} className={cn(stackClasses, "py-4")}>
+        <PageHeader
+          title="Activity"
+          hideBack
+          subtitle={
+            pages.data
+              ? `${count}${next ? "+" : ""} ${count === 1 ? "movement" : "movements"} · in and out`
+              : "Every movement of your money, in and out"
+          }
+        />
 
         {pages.isLoading ? (
-          <Surface kind="sunken" radius="3xl" className="grid place-items-center py-12">
-            <div className="loader" />
-          </Surface>
+          <SkeletonRows rows={6} />
         ) : pages.isError ? (
-          <InfoBanner tone="warning" icon={<PiWarningOctagonFill className="text-amber-500" />}>
-            <p className="font-medium text-[var(--fg)]">Couldn&apos;t load your activity</p>
-            <p className="mt-1 text-xs">
-              {pages.error instanceof Error
-                ? pages.error.message
-                : "Try again in a moment."}
+          <InfoBanner tone="error" icon={<PiWarningBold />}>
+            <p className="font-medium">Could not load your activity</p>
+            <p className="mt-0.5 text-xs">
+              {pages.error instanceof Error ? pages.error.message : "Try again in a moment."}
             </p>
           </InfoBanner>
         ) : (
           <>
             <MovementList
-              movements={movements}
+              items={feed}
+              grouped
               emptyState={
                 <EmptyState title="Nothing here yet">
-                  Add cash through an agent, or receive USDC on Base, and every
-                  movement will be listed here.
+                  Add cash through an agent, or receive USDC on Base, and every movement will
+                  be listed here.
                 </EmptyState>
               }
             />
 
             {next ? (
-              <Button
-                variant="secondary"
-                loading={pages.isFetching}
-                onClick={() => setCursors((c) => [...c, next])}
-              >
-                Load more
-              </Button>
+              <div className="md:flex md:justify-center">
+                <Button
+                  variant="secondary"
+                  loading={pages.isFetching}
+                  onClick={() => setCursors((c) => [...c, next])}
+                  className="md:w-auto md:px-6"
+                >
+                  Load more
+                </Button>
+              </div>
             ) : movements.length ? (
-              <p className="pb-4 text-center text-xs text-[var(--fg-subtle)]">
-                That&apos;s everything.
-              </p>
+              <p className="text-xs text-fg-subtle">That is everything.</p>
             ) : null}
           </>
         )}

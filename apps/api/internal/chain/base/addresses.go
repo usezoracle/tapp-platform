@@ -98,6 +98,17 @@ func (a *Addresses) For(ctx context.Context, user uuid.UUID) (string, error) {
 	return a.allocateSmartAccount(ctx, user)
 }
 
+// Current is the user's address that is still being handed out, if any.
+//
+// Exported for callers that need to know which account holds a person's funds
+// without issuing one -- settling a card tap sells from it, and a tap must
+// never be the thing that mints an address.
+func (a *Addresses) Current(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, user uuid.UUID) (address, provider string, ok bool, err error) {
+	return a.current(ctx, q, user)
+}
+
 // current returns the user's address that is still being handed out.
 //
 // Retired rows are excluded here and only here. Everything else that reads

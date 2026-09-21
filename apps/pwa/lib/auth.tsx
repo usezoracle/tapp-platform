@@ -18,6 +18,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -413,8 +414,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setSession(newSession);
   }, []);
 
+  // Memoised so consumers re-render when the session actually changes, not on
+  // every render of this provider. An object literal here gave every consumer
+  // a new context value each time, which is how a token refresh could restart
+  // an in-flight card claim in another component and strand it.
+  const value = useMemo(
+    () => ({ session, hydrated, refresh, clear, login }),
+    [session, hydrated, refresh, clear, login],
+  );
+
   return (
-    <SessionContext.Provider value={{ session, hydrated, refresh, clear, login }}>
+    <SessionContext.Provider value={value}>
       {children}
     </SessionContext.Provider>
   );

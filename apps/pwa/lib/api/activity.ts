@@ -24,6 +24,18 @@ export interface Movement {
   refType?: string;
   refId?: string;
   at: string;
+  /**
+   * Where a card was tapped. Present on movements whose `refType` is
+   * "tap"; null on everything else. `symbol` names the business's listing
+   * when it has one, which is what a tap there buys a slice of.
+   */
+  merchant?: Merchant | null;
+}
+
+export interface Merchant {
+  ref: string;
+  name: string;
+  symbol: string | null;
 }
 
 export interface ActivityPage {

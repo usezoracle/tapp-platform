@@ -21,7 +21,7 @@ export function Preloader() {
           initial={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.4, ease: "easeInOut" }}
-          className="fixed inset-0 z-[200] grid min-h-screen place-items-center bg-white dark:bg-neutral-900"
+          className="fixed inset-0 z-[200] grid min-h-screen place-items-center bg-surface"
         >
           <motion.div
             initial={{ scale: 1 }}

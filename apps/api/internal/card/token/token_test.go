@@ -65,19 +65,21 @@ func TestACardWhoseWriteFailedStillWorks(t *testing.T) {
 	}
 }
 
-// The widened replay window is bounded. An app that never acknowledges cannot
-// hold two tokens valid forever.
-func TestAnUnacknowledgedTokenExpires(t *testing.T) {
+// An unacknowledged token does not expire. The card holding it is the card
+// that was written; a lost acknowledgement an hour ago is still a lost
+// acknowledgement, and the card must keep working until its next tap
+// promotes the token. See Verify.
+func TestAnUnacknowledgedTokenDoesNotExpire(t *testing.T) {
 	cur, pending := fresh(t), fresh(t)
 	issued := time.Now()
 	s := State{Current: cur, Pending: pending, PendingIssuedAt: &issued}
 
-	if _, err := s.Verify(pending, issued.Add(PendingTTL+time.Second)); !errors.Is(err, ErrMismatch) {
-		t.Fatalf("an expired pending token was accepted: %v", err)
+	later := issued.Add(24 * time.Hour)
+	if got, err := s.Verify(pending, later); err != nil || got != MatchesPending {
+		t.Fatalf("a day-old pending token was refused: %v, %v", got, err)
 	}
-	// The current token is unaffected by the pending one expiring.
-	if got, err := s.Verify(cur, issued.Add(PendingTTL+time.Second)); err != nil || got != MatchesCurrent {
-		t.Fatalf("the current token stopped working when the pending one expired: %v, %v", got, err)
+	if got, err := s.Verify(cur, later); err != nil || got != MatchesCurrent {
+		t.Fatalf("the current token stopped working alongside an old pending one: %v, %v", got, err)
 	}
 }
 
@@ -107,16 +109,5 @@ func TestMalformedAndMissingTokens(t *testing.T) {
 		if _, err := s.Verify(presented, time.Now()); !errors.Is(err, ErrMismatch) {
 			t.Errorf("%s token was not refused", name)
 		}
-	}
-}
-
-// A pending token with no issue time is not live: without a timestamp the TTL
-// cannot be enforced, and an unbounded second valid token is worse than none.
-func TestAPendingTokenWithoutATimestampIsIgnored(t *testing.T) {
-	cur, pending := fresh(t), fresh(t)
-	s := State{Current: cur, Pending: pending}
-
-	if _, err := s.Verify(pending, time.Now()); !errors.Is(err, ErrMismatch) {
-		t.Fatal("a pending token with no issue time was accepted")
 	}
 }

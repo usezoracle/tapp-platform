@@ -36,7 +36,7 @@ export async function readCardPayload(signal?: AbortSignal): Promise<{
           (r) => r.recordType === ZORACLE_NDEF_TYPE,
         );
         if (!record || !record.data) {
-          reject(new Error("Card has no Tapp payload — needs to be linked first"));
+          reject(new Error("Card has no Freedom payload — needs to be linked first"));
           return;
         }
         const data = record.data;

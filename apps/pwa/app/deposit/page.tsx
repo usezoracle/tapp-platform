@@ -60,7 +60,7 @@ export default function DepositPage() {
         <Route
           href="/deposit/naira"
           icon={<PiBankBold />}
-          title="Naira"
+          title="Transfer in naira"
           body="Transfer to your own account number from any Nigerian bank. Naira in your balance when it lands."
           balanceLabel="Your naira"
           balance={ngn?.available}
@@ -69,7 +69,7 @@ export default function DepositPage() {
         <Route
           href="/cash"
           icon={<PiMoneyWavyBold />}
-          title="Cash"
+          title="Deposit cash"
           body="Photograph the notes and hand them to an agent near you. Naira in your balance when they confirm."
           balanceLabel="Your naira"
           balance={ngn?.available}
@@ -78,7 +78,7 @@ export default function DepositPage() {
         <Route
           href="/deposit/base"
           icon={<PiCoinsBold />}
-          title="Crypto"
+          title="Deposit crypto"
           body="Send USDC on Base to your own address. Dollars in your balance once the network confirms it."
           balanceLabel="Your dollars"
           balance={usd?.available}

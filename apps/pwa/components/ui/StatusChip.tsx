@@ -3,32 +3,40 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-type Tone = "neutral" | "success" | "warning" | "error" | "pending";
+export type ChipTone = "neutral" | "success" | "warning" | "error" | "pending";
 
 interface StatusChipProps {
+  /** Optional icon; replaces the dot. */
   icon?: ReactNode;
   children: ReactNode;
-  tone?: Tone;
+  tone?: ChipTone;
   className?: string;
 }
 
-const toneIconClasses: Record<Tone, string> = {
-  neutral: "text-gray-400 dark:text-white/40",
-  success: "text-green-700 dark:text-green-500",
-  warning: "text-amber-500 dark:text-amber-400",
-  error:   "text-rose-500",
-  pending: "text-sky-500",
+const toneClasses: Record<ChipTone, { chip: string; dot: string }> = {
+  neutral: { chip: "bg-sunken text-fg-muted",      dot: "bg-fg-subtle" },
+  success: { chip: "bg-positive-wash text-positive-fg",        dot: "bg-positive" },
+  warning: { chip: "bg-caution-wash text-caution-fg",    dot: "bg-caution" },
+  error:   { chip: "bg-negative-wash text-negative-fg",      dot: "bg-negative" },
+  pending: { chip: "bg-pending-wash text-pending-fg",    dot: "bg-pending" },
 };
 
+/** Small soft chip: pastel ground, dark text, a 6px dot. */
 export function StatusChip({ icon, children, tone = "neutral", className }: StatusChipProps) {
+  const t = toneClasses[tone];
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full bg-gray-50 px-2 py-1 text-xs font-medium text-neutral-900 dark:bg-white/5 dark:text-white/80",
+        "inline-flex h-5 items-center gap-1.5 rounded-sm px-1.5 text-[11px] font-medium leading-none whitespace-nowrap",
+        t.chip,
         className,
       )}
     >
-      {icon ? <span className={cn("text-sm", toneIconClasses[tone])}>{icon}</span> : null}
+      {icon ? (
+        <span className="[&>svg]:size-3">{icon}</span>
+      ) : (
+        <span aria-hidden className={cn("size-1.5 rounded-full", t.dot)} />
+      )}
       <span>{children}</span>
     </span>
   );

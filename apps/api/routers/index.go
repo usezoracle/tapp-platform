@@ -2,6 +2,7 @@ package routers
 
 import (
 	"context"
+	"github.com/spf13/viper"
 	"net/http"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/usezoracle/tapp/api/internal/identity/kyc"
 	kycfintava "github.com/usezoracle/tapp/api/internal/identity/kyc/fintava"
 	"github.com/usezoracle/tapp/api/internal/identity/limits"
+	"github.com/usezoracle/tapp/api/internal/money"
 	"github.com/usezoracle/tapp/api/internal/orders"
 	"github.com/usezoracle/tapp/api/internal/settlement"
 	"github.com/usezoracle/tapp/api/routers/middleware"
@@ -34,6 +36,11 @@ import (
 )
 
 // RegisterRoutes add all routing list here automatically get main router
+// tapService is the one wired tap service: the merchant app charges and
+// reverses through it, and so does the console, so a reversal from either
+// leaves the books — and the exchange — in the same shape.
+var tapService *tap.Service
+
 func RegisterRoutes(route *gin.Engine) {
 
 	route.NoRoute(func(ctx *gin.Context) {
@@ -263,6 +270,14 @@ func authRoutes(route *gin.Engine) {
 	v1.GET("me/balances", middleware.JWTMiddleware, balances.Balances)
 	v1.GET("me/activity", middleware.JWTMiddleware, balances.Activity)
 
+	// What the cardholder's taps have bought them on the equity market.
+	// Thin proxies to the market, keyed on the user id; 404 without a
+	// market, 503 when it cannot be reached.
+	holdings := &apiv1.HoldingsHandler{Client: apiv1.SharedEquity(), User: apiv1.UserFromContext}
+	v1.GET("me/holdings", middleware.JWTMiddleware, holdings.List)
+	v1.GET("me/holdings/:symbol", middleware.JWTMiddleware, holdings.Get)
+	v1.GET("me/equity-activity", middleware.JWTMiddleware, holdings.Activity)
+
 	// Currency conversion. Two steps by design: a price is offered, then
 	// accepted. Quoting and executing in one call would convert at whatever
 	// the rate happened to be when the request arrived, which is what the
@@ -325,18 +340,44 @@ func senderRoutes(route *gin.Engine) {
 	// The fee is configuration, not a constant buried in the handler -- the
 	// predecessor applied a hardcoded 100 basis points inline, with a comment
 	// apologising for it.
-	tapHandler := &apiv1.TapHandler{
-		Svc: &tap.Service{
-			Pool: storage.Pool,
-			Fee:  tap.BasisPointFee(config.OrderConfig().CardFeeBPS),
-		},
-		Merchant: apiv1.MerchantFromContext,
+	offrampSettler := apiv1.SharedSettler()
+	tapService = &tap.Service{
+		Pool: storage.Pool,
+		Fee:  tap.BasisPointFee(config.OrderConfig().CardFeeBPS),
+		// Balances are held as they arrive -- USDC, so dollars -- and the
+		// exchange happens here, at the till, for the amount actually
+		// being spent. Converting at deposit instead would leave the
+		// platform long naira against money nobody has spent yet.
+		Funding: money.Currency(viper.GetString("FUNDING_CURRENCY")),
+		Quoter:  apiv1.SharedQuoter(),
+		// The tap records what has to be settled and where the money
+		// came from; the wiring splits it between the rails. What was
+		// bought with USDC is sold a moment later from the cardholder's
+		// own account; what came from a naira balance is paid out of
+		// the cardholder's own naira wallet.
+		Settle: apiv1.RecordTapSettlement(offrampSettler),
+		// And that the equity market has to hear of it. Queued in the
+		// tap's transaction, delivered by a worker; nil without a
+		// market, and the tap package never learns one exists.
+		Equity:         apiv1.RecordTapEquity(apiv1.SharedEquity()),
+		EquityReversal: apiv1.RecordReversalEquity(apiv1.SharedEquity()),
 	}
+	tapHandler := &apiv1.TapHandler{Svc: tapService, Merchant: apiv1.MerchantFromContext}
 	me.GET("tap-card/nonce", tapHandler.Challenge)
 	me.POST("tap-card", tapHandler.Debit)
 	me.POST("tap-card/:tap_id/token-ack", tapHandler.Acknowledge)
 	me.POST("tap-card/:tap_id/reverse", tapHandler.Reverse)
 	me.GET("tap-card/step-up", cardsCtrl.TapCardStepUpPoll)
+
+	// The merchant's business on the equity market: register (= list), and
+	// read the record with its live cap table. Off without a market, and
+	// the handlers say so.
+	businessHandler := &apiv1.BusinessHandler{
+		Pool: storage.Pool, Client: apiv1.SharedEquity(), Merchant: apiv1.MerchantFromContext,
+	}
+	me.POST("business", businessHandler.Create)
+	me.GET("business", businessHandler.Get)
+	me.GET("business/holders", businessHandler.Holders)
 }
 
 func providerRoutes(route *gin.Engine) {
@@ -456,11 +497,14 @@ func cardsRoutes(route *gin.Engine) {
 	adminConsole.POST("agents/:id/verify", adminAgents.Verify)
 	adminConsole.POST("agents/:id/allocate", adminAgents.Allocate)
 
-	// The transaction console and the deposit-address views went with Sui.
-	// Both were reads over Route A orders and Sui receive addresses; a
-	// ledger-backed replacement belongs on ledger_transactions and
-	// base_deposits, and shipping a half-ported version that silently showed
-	// an empty timeline would be worse than showing nothing.
+	// Every payment -- card taps and integrator offramps -- with the ledger's
+	// own record of each as its timeline. Read straight off the tables that
+	// hold them; there is no log to keep in step.
+	txCtrl := adminCtrl.NewTransactionsController()
+	adminConsole.GET("transactions", txCtrl.GetTransactions)
+	adminConsole.GET("transactions/:id", txCtrl.GetTransaction)
+	adminConsole.POST("transactions/:id/reverse", (&adminCtrl.ReverseTapController{Svc: tapService}).ReverseTap)
+
 	integratorsCtrl := adminCtrl.NewIntegratorsController()
 	adminConsole.POST("integrators", integratorsCtrl.CreateIntegrator)
 	adminConsole.GET("integrators", integratorsCtrl.GetIntegrators)
@@ -515,6 +559,21 @@ func cardsRoutes(route *gin.Engine) {
 	adminConsole.GET("webhooks", webhookCtrl.GetWebhookAttempts)
 	adminConsole.POST("webhooks/:id/retry", webhookCtrl.RetryWebhook)
 
+	// Cardholders' naira deposit accounts: find by email, correct the bank a
+	// row names, and post the credits a webhook that went elsewhere never
+	// delivered. The reconcile is a credit to a person and is audited with
+	// every figure it was computed from.
+	ngnOps := adminCtrl.NewNGNDepositsController()
+	adminConsole.GET("deposits/ngn/accounts", ngnOps.Find)
+	adminConsole.POST("deposits/ngn/accounts/:account_number/bank", ngnOps.SetBankName)
+	adminConsole.POST("deposits/ngn/accounts/:account_number/reconcile", ngnOps.ReconcileAccount)
+
+	// Naira legs: what taps took from naira balances, paid to merchants out
+	// of cardholders' own wallets. List them, and retry one the rail
+	// refused.
+	ngnSettlements := adminCtrl.NewNGNSettlementsController(apiv1.SharedNairaWorker())
+	adminConsole.GET("settlements/ngn", ngnSettlements.GetSettlements)
+	adminConsole.POST("settlements/ngn/:tap_id/retry", ngnSettlements.RetrySettlement)
 }
 
 // kycProvider builds the identity verifier, or nil when it is not configured.

@@ -26,18 +26,9 @@ import (
 // Len is the token size in bytes.
 const Len = 32
 
-// PendingTTL bounds how long an unacknowledged token stays acceptable.
-//
-// Between a debit and its acknowledgement two tokens are valid, which is a
-// wider replay window than one. The window is bounded so it cannot be held
-// open indefinitely by an app that simply never acknowledges: past this, the
-// pending token is disregarded and the card is back to a single valid value.
-const PendingTTL = 10 * time.Minute
-
 var (
-	// ErrMismatch means the card presented neither the current token nor a
-	// live pending one. Either it is a clone, or a write was lost long enough
-	// ago that the pending token expired.
+	// ErrMismatch means the card presented neither the current token nor the
+	// pending one. It is a clone, or a write was torn.
 	ErrMismatch = errors.New("card token does not match")
 
 	// ErrNotProvisioned means the card has no token at all, so it was never
@@ -80,6 +71,19 @@ const (
 // byte-equality loop that returned on the first differing byte, which leaks
 // how much of a guess was correct -- and the value being guessed is the one
 // thing standing between a cloned card and a working one.
+//
+// A pending token matches for as long as it is pending; there is no time
+// limit. There used to be one, on the reasoning that two valid tokens is a
+// wider replay window than one and an app that never acknowledges should not
+// hold it open forever. But the pending value is 32 random bytes only the
+// server and the card that was written know, so a card presenting it is
+// proof the write landed and only the acknowledgement was lost. Refusing it
+// after ten minutes did not narrow anything: the OLD token stayed valid the
+// whole time, so a clone taken before the write kept working while the real
+// card -- the one holding the newer token -- was refused, counted as a
+// mismatch, and locked. Whichever of the two taps first is promoted and the
+// other dies, which is the same guarantee the window gave, minus the case
+// where it bricked the genuine card.
 func (s State) Verify(presented []byte, now time.Time) (Match, error) {
 	if len(s.Current) == 0 {
 		return NoMatch, ErrNotProvisioned
@@ -92,17 +96,9 @@ func (s State) Verify(presented []byte, now time.Time) (Match, error) {
 		return MatchesCurrent, nil
 	}
 
-	if s.pendingLive(now) && subtle.ConstantTimeCompare(presented, s.Pending) == 1 {
+	if len(s.Pending) == Len && subtle.ConstantTimeCompare(presented, s.Pending) == 1 {
 		return MatchesPending, nil
 	}
 
 	return NoMatch, ErrMismatch
-}
-
-// pendingLive reports whether an unacknowledged token is still within its TTL.
-func (s State) pendingLive(now time.Time) bool {
-	if len(s.Pending) != Len || s.PendingIssuedAt == nil {
-		return false
-	}
-	return now.Sub(*s.PendingIssuedAt) <= PendingTTL
 }

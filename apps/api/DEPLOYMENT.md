@@ -71,6 +71,13 @@ CARD_RECOVERY_SENDGRID_TEMPLATE=         # dynamic template id (d-...)
 
 # KYC runs on Fintava's compliance endpoints — see FINTAVA_API_KEY above.
 # No separate provider credentials.
+
+# Cardholder naira deposit accounts (see docs/ngn-deposits-spec.md, "Operations").
+# The partner bank behind Fintava STATIC_FUND wallets, used when the
+# create-customer response does not name one, and shown in place of the
+# retired "Fintava partner bank" placeholder on rows that still carry it.
+FINTAVA_DEPOSIT_BANK_NAME=               # e.g. Loma Microfinance Bank
+FINTAVA_DEPOSIT_BANK_CODE=               # its NIP code, e.g. 090620
 ```
 
 ### Migration

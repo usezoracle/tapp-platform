@@ -1,4 +1,4 @@
-package v1
+package ratescfg
 
 import (
 	"encoding/json"
@@ -12,13 +12,16 @@ import (
 	"github.com/usezoracle/tapp/api/internal/rates/sources"
 )
 
-// configureRates builds the rate engine and spread table from environment
+// FromEnv builds the rate engine and spread table from environment
 // configuration.
 //
-// It lives at the wiring layer rather than inside the rates package, because
-// assembling concrete providers is composition: rates defines the Source
-// interface and sources implements it, and having the interface package reach
-// back for the implementations is a cycle.
+// Its own package rather than inside `rates`, because assembling concrete
+// providers is composition: rates defines the Source interface and sources
+// implements it, and having the interface package reach back for the
+// implementations is a cycle. Its own package rather than the API wiring,
+// because more than the API needs it -- an operational command that converts
+// balances must price them exactly as the deposit path does, and two copies
+// of this parsing would eventually disagree about a rate.
 //
 // Sources are declared as JSON rather than as one env var per provider,
 // because adding a provider should not require a code change or a new
@@ -27,7 +30,7 @@ import (
 //
 //	FX_SOURCES=[{"id":"a","url":"https://…/{base}/{quote}","path":"data.rate"}]
 //	FX_SPREADS=USD/NGN:50,NGN/USD:50
-func configureRates() (*rates.Engine, rates.Spread, error) {
+func FromEnv() (*rates.Engine, rates.Spread, error) {
 	engine := &rates.Engine{
 		MaxDeviation: decimal.NewFromFloat(viper.GetFloat64("FX_MAX_DEVIATION")),
 	}

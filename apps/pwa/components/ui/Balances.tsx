@@ -1,126 +1,151 @@
 "use client";
 
 import Link from "next/link";
-import { PiLockSimpleBold } from "react-icons/pi";
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { Amount, CurrencyTag } from "./Amount";
-import { Surface } from "./Surface";
-import { HOME_CURRENCY, worthShowing, useBalanceTotal } from "@/lib/ledger";
+import { hueStyle } from "@/lib/nav";
+import { Amount } from "./Amount";
+import { Button } from "./Button";
+import { CurrencyIcon } from "./CurrencyIcon";
+import { DuotoneIcon, type DuotoneName } from "./DuotoneIcon";
+import { HOME_CURRENCY, useBalanceTotal } from "@/lib/ledger";
 import type { CurrencyBalance } from "@/lib/api";
 
 /**
- * What you have: one headline, then the currencies it is made of.
+ * What you have: one headline, the currencies it is made of, and one line
+ * about what that means today.
  *
  * The headline is everything, converted to naira. Leading with the naira
  * balance alone was worse in a specific way: the card said "Balance" and
  * showed ₦0.00 to somebody holding ten cents, which reads as having nothing.
  * A label that says "everything" must not show one currency's slice.
  *
- * The breakdown underneath is what keeps the earlier objection answered. A
- * converted headline moves when the rate moves and nobody has spent anything,
- * so the per-currency figures stay on screen, unconverted and exact. One
- * number ALONE would leave no way to tell a price change from a payment;
- * one number ABOVE its parts does not.
- *
- * The headline carries no "approximate" caveat: the breakdown is the
- * disclosure. `total.converted` still comes back from the server, so the
- * caveat can be reinstated in one line if it is ever wanted.
+ * The legs sit under it as two quiet chips, not rows. A converted headline
+ * moves when the rate moves and nobody has spent anything, so the
+ * per-currency figures stay on screen, unconverted and exact -- but they
+ * are the disclosure, not the point, and a chip says that where a row of
+ * equal weight did not.
  *
  * With no rate available the server sends no total, and the headline falls
- * back to the home currency rather than inventing one.
+ * back to the home currency rather than inventing one; the naira chip is
+ * then left out, since it would repeat the headline.
+ *
+ * No box around any of it: the page is the container.
  */
-export function Balances({
+/**
+ * The status line's glyph and hue: a card line is the card's violet, a
+ * warning is amber, and "nothing linked" is slate -- the same colours
+ * the same things have in the rail.
+ */
+export interface StatusLine {
+  icon: DuotoneName;
+  hue: string;
+  text: ReactNode;
+}
+
+export function BalanceHero({
   balances,
+  status,
   className,
 }: {
   balances: CurrencyBalance[];
+  /** One line under the legs: the most useful true thing right now. */
+  status?: StatusLine | null;
   className?: string;
 }) {
   const total = useBalanceTotal();
   const home = balances.find((b) => b.currency === HOME_CURRENCY);
 
-  // With a total, every currency belongs in the breakdown -- the headline is
-  // no longer any one of them. Without one, the headline IS naira, so naira
-  // would otherwise be shown twice.
   const headline = total.data?.amount ?? home?.available;
-  const parts = balances.filter((b) =>
-    total.data ? worthShowing(b) : b.currency !== HOME_CURRENCY && worthShowing(b),
-  );
+
+  // A breakdown of one part is not a breakdown. With a total, the legs are
+  // shown only when there are at least two of them worth showing -- a lone
+  // "NGN ₦0.00" under a ₦0.00 headline says the same thing twice. Without
+  // a total the headline is naira itself, so any other leg is new
+  // information and is shown on its own.
+  const nonZero = (b: CurrencyBalance) => b.available.minor !== 0 || b.escrow.minor !== 0;
+  const legs = total.data ? balances.filter(nonZero) : balances.filter((b) => b.currency !== HOME_CURRENCY && nonZero(b));
+  const parts = total.data && legs.length < 2 ? [] : legs;
 
   return (
-    <Surface radius="3xl" className={cn("grid gap-4", className)}>
-      <div className="grid gap-1">
-        <p className="text-xs font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
-          Balance
-        </p>
-        <Amount value={headline} size="hero" />
-        {!total.data && home && home.escrow.minor !== 0 ? (
-          <Escrowed amount={home.escrow} />
-        ) : null}
-      </div>
-
+    <div className={cn("grid gap-2", className)}>
+      <p className="eyebrow">Balance</p>
+      <Amount value={headline} size="headline" />
       {parts.length ? (
-        <div className="grid gap-2 border-t border-[var(--line)] pt-3">
+        <dl className="flex flex-wrap items-center gap-1.5">
           {parts.map((b) => (
-            <div key={b.currency} className="grid gap-0.5">
-              <div className="flex items-center justify-between gap-3">
-                <CurrencyTag code={b.currency} />
-                <Amount value={b.available} size="md" />
-              </div>
-              {b.escrow.minor !== 0 ? <Escrowed amount={b.escrow} /> : null}
+            <div
+              key={b.currency}
+              className="inline-flex h-6 items-center gap-1.5 rounded-sm bg-sunken px-1.5"
+            >
+              <CurrencyIcon currency={b.currency} size={14} />
+              <dt className="text-[11px] font-medium uppercase tracking-wide text-fg-muted">
+                {b.currency}
+              </dt>
+              <dd className="text-xs font-medium tabular-nums text-fg">{b.available.display}</dd>
             </div>
           ))}
-        </div>
+        </dl>
       ) : null}
-    </Surface>
-  );
-}
-
-/**
- * Money that is committed but not yet gone.
- *
- * Shown apart from the spendable figure and never added to it. Somebody who
- * has pledged cash to an agent has that amount reserved against the handover;
- * folding it into "balance" would show them money they cannot spend, and they
- * would find out at a checkout counter.
- */
-function Escrowed({ amount }: { amount: CurrencyBalance["escrow"] }) {
-  return (
-    <p className="flex items-center gap-1.5 text-xs text-[var(--fg-muted)]">
-      <PiLockSimpleBold className="shrink-0" />
-      <Amount value={amount} size="sm" className="font-normal" /> held for a
-      handover
-    </p>
+      {status ? (
+        <p className="flex items-center gap-1.5 text-[13px] leading-5 text-fg-muted">
+          <DuotoneIcon name={status.icon} size={16} className="hue-text shrink-0" style={hueStyle(status.hue)} />
+          <span className="min-w-0 flex-1">{status.text}</span>
+        </p>
+      ) : null}
+    </div>
   );
 }
 
 /**
  * The row of things you can do with a balance.
  *
- * Four, deliberately: the two ways money comes in and the two ways it goes
- * out. A fifth would push these to a scroll on a small phone, which is where
- * an action goes to be never used.
+ * Three, deliberately: the two ways money comes in and the one way it goes
+ * out at a counter. A fourth would push these to a scroll on a small phone,
+ * which is where an action goes to be never used. 44px tall: these are
+ * pressed with a thumb, standing up.
+ *
+ * Cash in is the loud one. This is a naira product before it is a crypto
+ * one: the largest group of people it is for hold physical notes and want
+ * them in a balance.
  */
 export function BalanceActions() {
   // Receive goes to the chooser, not straight to a chain. Somebody adding
   // money has not yet decided whether they are handing over naira or sending
   // crypto, and sending them to one of the two answers is picking for them.
-  const actions = [
-    { href: "/cash", label: "Cash in" },
-    { href: "/deposit", label: "Receive" },
-    { href: "/pay", label: "Pay" },
-  ];
+  //
+  // The glyphs are duotone in the hue of the thing they lead to: cash and
+  // receiving are the wallet's royal, paying is Pay's royal. On the primary
+  // button the icon is drawn in the button's own text colour, since one
+  // hue on near-black is not legible.
+  const icon = "whitespace-nowrap";
   return (
     <div className="grid grid-cols-3 gap-2">
-      {actions.map((a) => (
-        <Link
-          key={a.href}
-          href={a.href}
-          className="grid justify-items-center gap-1 rounded-2xl border border-[var(--line)] bg-[var(--raised)] px-1 py-3 text-center text-xs font-medium text-[var(--fg)] transition-colors hover:bg-[var(--sunken)]"
+      <Link href="/cash" className="block">
+        <Button variant="primary" size="lg" leadingIcon={<DuotoneIcon name="cash" />} className={icon}>
+          Cash in
+        </Button>
+      </Link>
+      <Link href="/deposit" className="block">
+        <Button
+          variant="secondary"
+          size="lg"
+          leadingIcon={<DuotoneIcon name="arrow-in" className="hue-text" style={hueStyle("--nav-wallet")} />}
+          className={icon}
         >
-          {a.label}
-        </Link>
-      ))}
+          Receive
+        </Button>
+      </Link>
+      <Link href="/pay" className="block">
+        <Button
+          variant="secondary"
+          size="lg"
+          leadingIcon={<DuotoneIcon name="qr" className="hue-text" style={hueStyle("--nav-pay")} />}
+          className={icon}
+        >
+          Pay
+        </Button>
+      </Link>
     </div>
   );
 }

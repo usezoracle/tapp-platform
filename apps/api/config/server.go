@@ -10,18 +10,23 @@ import (
 
 // ServerConfiguration type defines the server configurations
 type ServerConfiguration struct {
-	Debug               bool
-	Host                string
-	Port                string
-	Timezone            string
-	AllowedHosts        string
-	TrustedProxies      string
-	Environment         string
-	SentryDSN           string
-	HostDomain          string
-	CheckoutBaseURL     string
-	PWABaseURL          string
-	AdminBaseURL        string
+	Debug           bool
+	Host            string
+	Port            string
+	Timezone        string
+	AllowedHosts    string
+	TrustedProxies  string
+	Environment     string
+	SentryDSN       string
+	HostDomain      string
+	CheckoutBaseURL string
+	PWABaseURL      string
+	AdminBaseURL    string
+	// BusinessBaseURL is the merchant web portal (apps/business), where a
+	// business registers and lists on the exchange. Listed here so its origin
+	// is allowed by CORS like the other browser apps.
+	BusinessBaseURL     string
+	ExtraOrigins        string
 	AdminAPIToken       string
 	GoogleOAuthClientID string
 	SettlementAPIURL    string
@@ -64,6 +69,8 @@ func ServerConfig() *ServerConfiguration {
 		CheckoutBaseURL:     viper.GetString("CHECKOUT_BASE_URL"),
 		PWABaseURL:          viper.GetString("PWA_BASE_URL"),
 		AdminBaseURL:        viper.GetString("ADMIN_BASE_URL"),
+		BusinessBaseURL:     viper.GetString("BUSINESS_BASE_URL"),
+		ExtraOrigins:        viper.GetString("EXTRA_ORIGINS"),
 		AdminAPIToken:       viper.GetString("ADMIN_API_TOKEN"),
 		GoogleOAuthClientID: viper.GetString("GOOGLE_OAUTH_CLIENT_ID"),
 		SettlementAPIURL:    viper.GetString("SETTLEMENT_API_URL"),

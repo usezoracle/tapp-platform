@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { DM_Sans, Inter } from "next/font/google";
+import { Bricolage_Grotesque, DM_Sans, Inter } from "next/font/google";
 import "./globals.css";
 import { QueryProvider } from "@/lib/query-provider";
 import { SessionProvider } from "@/lib/auth";
@@ -17,6 +17,13 @@ const inter = Inter({
   subsets: ["latin"],
 });
 
+// Display face: balance, big numerals, page titles only.
+const bricolage = Bricolage_Grotesque({
+  variable: "--font-bricolage",
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+});
+
 // Landing page + brand wordmark (the app body keeps Inter).
 const dmSans = DM_Sans({
   variable: "--font-dm-sans",
@@ -25,19 +32,16 @@ const dmSans = DM_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Tapp — Tap. Pay. Done.",
-  description:
-    "Customers tap to pay in USDC. Merchants get money in their bank — without ever touching crypto.",
+  title: "Freedom",
+  description: "Tap, pay, and own a piece of the shop.",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
-    title: "Tapp by Zoracle Labs",
+    title: "Freedom",
     statusBarStyle: "default",
   },
-  icons: {
-    icon: "/favicon.ico",
-    apple: "/icon-192.png",
-  },
+  // Icons come from the file conventions in app/: icon.svg + icon.png
+  // (favicon), favicon.ico (legacy), apple-icon.png (home screen).
 };
 
 export const viewport: Viewport = {
@@ -64,10 +68,10 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${dmSans.variable} h-full antialiased`}
+      className={`${inter.variable} ${bricolage.variable} ${dmSans.variable} h-full antialiased`}
       suppressHydrationWarning
     >
-      <body className="min-h-full bg-[var(--surface)] text-[var(--fg)] transition-colors">
+      <body className="min-h-full bg-surface text-fg transition-colors">
         <ThemeProvider>
           <SessionProvider>
             <QueryProvider>

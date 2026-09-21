@@ -19,7 +19,8 @@ import (
 )
 
 var (
-	// ErrCannotSend means no treasury key is configured, so nothing can leave.
+	// ErrCannotSend means there is no way to move tokens out: neither a
+	// signer for the holder's own account nor a treasury key.
 	ErrCannotSend = errors.New("base: withdrawals are not configured")
 	// ErrBadAddress means the destination is not a valid address.
 	ErrBadAddress = errors.New("base: that is not a valid Base address")
@@ -32,9 +33,75 @@ var (
 // no send is money we still hold and can return, whereas a send with no debit
 // is money gone that nobody paid for. When the send fails, the debit is
 // reversed.
+// SmartAccountSender moves tokens out of a smart account. Satisfied by
+// cdp.Client.
+type SmartAccountSender interface {
+	SweepSmartAccount(
+		ctx context.Context, account string, usdc, to common.Address,
+		amount *big.Int, idem string,
+	) (string, error)
+}
+
 type Withdrawals struct {
 	Pool  *pgxpool.Pool
 	Chain *Chain
+
+	// Addresses finds the account a user's funds actually sit in.
+	Addresses *Addresses
+
+	// SmartAccounts sends from that account, sponsored.
+	//
+	// Withdrawals used to be paid out of the treasury, because everything was
+	// swept into it. Nothing is swept now: a person's USDC stays at their own
+	// deposit address, and paying them from a treasury that no longer holds
+	// customer funds would fail with nothing to send. Nil falls back to the
+	// treasury, which is right only for a deployment that still pools.
+	SmartAccounts SmartAccountSender
+}
+
+// canSend reports whether a withdrawal has any way out at all.
+//
+// Either route will do: the person's own smart account, or the treasury for a
+// deployment that still pools. Requiring a treasury key specifically -- which
+// this did -- refuses withdrawals a non-custodial deployment can make
+// perfectly well, because it holds no customer funds to need a key for.
+func (w *Withdrawals) canSend() bool {
+	if w.SmartAccounts != nil && w.Addresses != nil {
+		return true
+	}
+	return w.Chain != nil && w.Chain.CanSend()
+}
+
+// send moves the USDC, from wherever the person's money actually is.
+//
+// Their own smart account when there is one, sponsored, so a withdrawal costs
+// them no gas and the platform never has to hold their funds to pay them. The
+// treasury is the fallback for a deployment that still pools.
+//
+// The withdrawal id is the idempotency key. A retry after a lost response is
+// the same withdrawal to CDP, not a second send of the same money.
+func (w *Withdrawals) send(
+	ctx context.Context, id, user uuid.UUID, micro int64, to string,
+) (string, error) {
+	dst := common.HexToAddress(to)
+	amount := big.NewInt(micro)
+
+	if w.SmartAccounts != nil && w.Addresses != nil {
+		from, _, ok, err := w.Addresses.Current(ctx, w.Pool, user)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			return w.SmartAccounts.SweepSmartAccount(
+				ctx, from, w.Chain.USDC, dst, amount, "withdrawal:"+id.String())
+		}
+		// No current address means nowhere of theirs to send from. Falling
+		// through to the treasury would pay them out of pooled funds they may
+		// have no claim on beyond the ledger, so it is refused instead.
+		return "", fmt.Errorf("base: %s has no deposit address to withdraw from", user)
+	}
+
+	return w.Chain.SendUSDC(ctx, w.Chain.TreasuryKey(), dst, amount)
 }
 
 // Request is a user asking to move USDC out.
@@ -49,7 +116,7 @@ type Request struct {
 
 // Open debits the user and queues the send.
 func (w *Withdrawals) Open(ctx context.Context, req Request) (uuid.UUID, error) {
-	if !w.Chain.CanSend() {
+	if !w.canSend() {
 		return uuid.Nil, ErrCannotSend
 	}
 	if !common.IsHexAddress(req.To) {
@@ -83,7 +150,7 @@ func (w *Withdrawals) Open(ctx context.Context, req Request) (uuid.UUID, error) 
 
 // Send submits queued withdrawals.
 func (w *Withdrawals) Send(ctx context.Context) (int, error) {
-	if !w.Chain.CanSend() {
+	if !w.canSend() {
 		return 0, nil
 	}
 
@@ -122,8 +189,7 @@ func (w *Withdrawals) Send(ctx context.Context) (int, error) {
 
 	sent := 0
 	for _, p := range due {
-		txHash, err := w.Chain.SendUSDC(ctx, w.Chain.TreasuryKey(),
-			common.HexToAddress(p.to), big.NewInt(p.micro))
+		txHash, err := w.send(ctx, p.id, p.user, p.micro, p.to)
 		if err != nil {
 			// The send did not happen, so the debit must not stand. Returning
 			// it here rather than leaving the user short is the whole reason
