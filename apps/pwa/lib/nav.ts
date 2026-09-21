@@ -38,17 +38,19 @@ const isCard = (p: string) =>
  * card earns; Settings last. The tabs drop Holdings -- five is the most
  * a thumb can tell apart -- and the Stocks tile on the wallet links to it.
  *
- * Each has one hue, from the theme's semantic set (globals.css). The same
- * hue is used wherever the same thing is meant elsewhere on a screen: a
- * card tile is violet, a stocks tile is green.
+ * The navigation is one colour: every glyph is drawn duotone in `--nav`
+ * (the accent), so the rail reads as one instrument rather than six. The
+ * semantic hues (`--nav-card` violet, `--nav-holdings` green, …) still
+ * colour the tiles and rows on the screens themselves, where meaning is
+ * what the colour carries.
  */
 export const NAV_ITEMS: NavItem[] = [
-  { href: "/",              label: "Wallet",   icon: "wallet",   hue: "--nav-wallet",   match: (p) => p === "/" || p === "/wallet" },
-  { href: "/history",       label: "Activity", icon: "activity", hue: "--nav-activity", match: (p) => p === "/history" },
-  { href: "/cash",          label: "Cash",     icon: "cash",     hue: "--nav-pay",      match: (p) => p === "/cash" || p.startsWith("/cash/") },
-  { href: "/settings/card", label: "Card",     icon: "card",     hue: "--nav-card",     match: isCard },
-  { href: "/holdings",      label: "Holdings", icon: "chart",    hue: "--nav-holdings", match: (p) => p.startsWith("/holdings") },
-  { href: "/settings",      label: "Settings", icon: "gear",     hue: "--nav-settings", match: (p) => (p === "/settings" || p.startsWith("/settings/")) && !isCard(p) },
+  { href: "/",              label: "Wallet",   icon: "wallet",   hue: "--nav", match: (p) => p === "/" || p === "/wallet" },
+  { href: "/history",       label: "Activity", icon: "activity", hue: "--nav", match: (p) => p === "/history" },
+  { href: "/cash",          label: "Cash",     icon: "cash",     hue: "--nav", match: (p) => p === "/cash" || p.startsWith("/cash/") },
+  { href: "/settings/card", label: "Card",     icon: "card",     hue: "--nav", match: isCard },
+  { href: "/holdings",      label: "Holdings", icon: "chart",    hue: "--nav", match: (p) => p.startsWith("/holdings") },
+  { href: "/settings",      label: "Settings", icon: "gear",     hue: "--nav", match: (p) => (p === "/settings" || p.startsWith("/settings/")) && !isCard(p) },
 ];
 
 /** The five that fit under a thumb. */
