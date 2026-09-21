@@ -1,0 +1,12 @@
+# What `vercel` must not upload.
+#
+# The project's Root Directory is apps/pwa, but the CLI uploads from the
+# repository root, so anything here that is large and irrelevant is paid for
+# on every deploy. A 1.5GB apps/pwa.zip left in the tree is exactly that --
+# it already timed out a `railway up`.
+*.zip
+apps/api
+apps/merchant
+android
+ios
+docs

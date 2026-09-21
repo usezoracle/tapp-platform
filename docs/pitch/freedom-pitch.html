@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Freedom — Pitch</title>
+<style>
+:root{
+  --green:#40FF00;
+  --mint:#BFFFAC;
+  --green-ink:#158A00;
+  --dark:#1F1F1F;
+  --light:#F4F4F4;
+  --ink:#141414;
+  --muted-l:#757575;
+  --muted-d:#9E9E9E;
+  --pad-x:150px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#222;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+body{
+  font-family:-apple-system,"SF Pro Display","SF Pro Text","Helvetica Neue",Inter,Arial,sans-serif;
+  font-synthesis:none;-webkit-font-smoothing:antialiased;
+}
+
+/* ---------- slide shell ---------- */
+.slide{
+  position:relative;width:1920px;height:1080px;overflow:hidden;
+  padding:108px var(--pad-x) 0;display:flex;flex-direction:column;
+  page-break-after:always;break-after:page;
+}
+.slide:last-child{page-break-after:auto;break-after:auto}
+.slide::before{content:"";position:absolute;inset:0;pointer-events:none;z-index:0}
+.slide::after{
+  content:"";position:absolute;inset:0;pointer-events:none;z-index:0;opacity:.5;
+  background-image:radial-gradient(circle at 22% 78%,rgba(0,0,0,.028),transparent 62%);
+}
+.slide>*{position:relative;z-index:1}
+
+.light{background:var(--light);color:var(--ink)}
+.light::before{background:repeating-linear-gradient(115deg,transparent 0 82px,rgba(0,0,0,.030) 82px 83px)}
+.dark{background:var(--dark);color:#F7F7F7}
+.dark::before{background:repeating-linear-gradient(115deg,transparent 0 82px,rgba(255,255,255,.032) 82px 83px)}
+.dark::after{background-image:radial-gradient(circle at 22% 78%,rgba(255,255,255,.030),transparent 62%)}
+.green{background:var(--green);color:#0F1512}
+.wavy::before{
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='128'%3E%3Cpath d='M24 0 C 34 32, 14 64, 24 96 C 29 112, 26 120, 24 128' fill='none' stroke='rgba(0,0,0,0.055)' stroke-width='1.2'/%3E%3C/svg%3E");
+}
+
+/* ---------- shared type ---------- */
+.badge{
+  display:inline-block;align-self:flex-start;border:1.5px solid rgba(20,20,20,.45);
+  border-radius:999px;padding:11px 25px 13px;font-size:25px;letter-spacing:-.01em;line-height:1;
+}
+.dark .badge{border-color:rgba(255,255,255,.42);color:#EDEDED}
+h2{
+  font-size:47px;font-weight:500;letter-spacing:-.022em;line-height:1.1;margin-top:44px;
+}
+.dark h2{color:var(--mint)}
+h1{font-size:84px;font-weight:600;letter-spacing:-.032em;line-height:1.05;margin-top:46px}
+.lede{font-size:33px;font-weight:400;line-height:1.34;color:var(--muted-l);margin-top:22px;max-width:1180px}
+.dark .lede{color:var(--muted-d)}
+.body{flex:1;display:flex;flex-direction:column;justify-content:center;padding-bottom:38px}
+.foot{font-size:23px;line-height:1.5;color:var(--muted-l);padding-bottom:56px;max-width:1400px}
+.dark .foot{color:var(--muted-d)}
+.foot p+p{margin-top:9px}
+.mark{
+  position:absolute;right:var(--pad-x);bottom:56px;font-size:23px;letter-spacing:-.01em;
+  color:rgba(20,20,20,.42);z-index:1;
+}
+.dark .mark{color:rgba(255,255,255,.40)}
+.green .mark{color:rgba(15,21,18,.48)}
+
+/* star mark */
+.star{width:47px;height:47px;flex:none;display:block;fill:var(--green)}
+.dark .star.mint{fill:var(--mint)}
+
+/* ---------- rows ---------- */
+.rows{display:flex;flex-direction:column;gap:64px}
+.row{display:flex;align-items:flex-start;gap:38px}
+.row .t{font-size:38px;font-weight:400;letter-spacing:-.015em;line-height:1.2;padding-top:2px}
+.row .t b{font-weight:600}
+.row .d{display:block;font-size:27px;color:var(--muted-l);margin-top:12px;font-weight:400;max-width:1080px}
+.dark .row .d{color:var(--muted-d)}
+
+/* ---------- 3-col ---------- */
+.cols{display:grid;grid-template-columns:repeat(3,1fr);gap:96px;margin-top:26px}
+.cols h3{font-size:34px;font-weight:600;letter-spacing:-.02em;margin-top:26px}
+.cols p{font-size:26px;line-height:1.42;color:var(--muted-l);margin-top:14px}
+.dark .cols p{color:var(--muted-d)}
+
+/* ---------- stat grid ---------- */
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:74px 96px}
+.stats .v{font-size:46px;font-weight:600;letter-spacing:-.025em;margin-top:22px;line-height:1.05}
+.stats .l{font-size:28px;color:var(--muted-d);margin-top:10px;line-height:1.3}
+.light .stats .l{color:var(--muted-l)}
+
+/* ---------- two sides ---------- */
+.sides{display:grid;grid-template-columns:1fr 1fr;gap:120px}
+.side .k{font-size:25px;letter-spacing:.16em;color:var(--muted-d);text-transform:uppercase}
+.light .side .k{color:var(--muted-l)}
+.side .big{font-size:78px;font-weight:600;letter-spacing:-.03em;margin-top:24px;line-height:1.05}
+.dark .side .big{color:var(--mint)}
+.side .d{font-size:29px;color:var(--muted-d);margin-top:22px;line-height:1.4;max-width:640px}
+.light .side .d{color:var(--muted-l)}
+
+/* ---------- coverage ---------- */
+.cover-grid{display:grid;grid-template-columns:1.75fr 1fr;gap:110px}
+.cover-grid .k{font-size:25px;letter-spacing:.16em;color:var(--muted-l);text-transform:uppercase}
+.chips{display:flex;flex-wrap:wrap;gap:22px 26px;margin-top:34px}
+.chip{
+  display:flex;align-items:center;gap:16px;border:1.5px solid rgba(20,20,20,.22);
+  border-radius:999px;padding:15px 32px 17px;font-size:32px;letter-spacing:-.015em;line-height:1;
+}
+.chip .fl{font-size:34px;line-height:1}
+.chip.solid{background:var(--ink);color:#F4F4F4;border-color:var(--ink)}
+
+/* ---------- model grid ---------- */
+.model{display:grid;grid-template-columns:1fr 1fr;gap:76px 110px}
+.model h3{font-size:36px;font-weight:600;letter-spacing:-.02em;margin-top:24px}
+.model .price{font-size:28px;color:var(--mint);margin-top:12px}
+.model p{font-size:26px;line-height:1.4;color:var(--muted-d);margin-top:10px}
+
+/* ---------- math rows ---------- */
+.math{display:flex;flex-direction:column;gap:62px}
+.math .row{align-items:flex-start}
+.math .t{font-size:38px;font-weight:400;letter-spacing:-.015em;line-height:1.2}
+.math .eq{display:block;font-size:31px;margin-top:12px;color:var(--green-ink);letter-spacing:-.01em}
+.math .eq b{font-weight:600;color:var(--ink)}
+.dark .math .eq{color:var(--mint)}
+.dark .math .eq b{color:#F7F7F7}
+
+.math.tight{gap:32px;margin-top:30px}
+.math.tight .t{font-size:34px}
+.math.tight .eq{font-size:29px;margin-top:9px}
+.math .row.hi .eq{font-size:34px}
+
+/* ---------- assumptions ---------- */
+.assume{display:grid;grid-template-columns:1fr 1fr;gap:34px 110px}
+.assume .i{display:flex;flex-direction:column}
+.assume .n{font-size:27px;letter-spacing:-.01em}
+.assume .v{font-size:27px;font-weight:600;color:var(--green-ink);margin-top:5px}
+.assume .s{font-size:21px;color:var(--muted-l);margin-top:5px}
+
+/* ---------- phases ---------- */
+.phases{display:grid;grid-template-columns:repeat(3,1fr);gap:96px}
+.phase .k{font-size:24px;letter-spacing:.15em;text-transform:uppercase;color:var(--muted-d);margin-top:24px}
+.light .phase .k{color:var(--muted-l)}
+.phase h3{font-size:36px;font-weight:600;letter-spacing:-.02em;margin-top:16px}
+.phase .n{font-size:44px;font-weight:600;letter-spacing:-.025em;color:var(--mint);margin-top:22px;line-height:1.1}
+.light .phase .n{color:var(--green-ink)}
+.phase p{font-size:26px;line-height:1.4;color:var(--muted-d);margin-top:12px}
+.light .phase p{color:var(--muted-l)}
+
+/* ---------- centered slides ---------- */
+.center{align-items:center;justify-content:center;text-align:center;padding-top:0}
+.center .kicker{font-size:34px;font-weight:400}
+.center h1{font-size:100px;margin-top:32px}
+.center .sub{font-size:44px;color:var(--muted-l);margin-top:18px;font-weight:400}
+.center .mark{left:0;right:0;text-align:center}
+.center .badge{align-self:center}
+
+/* ---------- cover ---------- */
+.cover .logo{display:flex;align-items:center;gap:22px}
+.cover .logo .star{width:52px;height:52px}
+.cover .logo .star{fill:var(--ink)}
+.cover .logo span{font-size:46px;font-weight:600;letter-spacing:-.035em}
+.cover h1{font-size:92px;margin:0}
+.cover h1 .g{color:#8C8C8C;font-style:italic}
+.cover .tag{font-size:27px;color:var(--muted-l);margin-top:26px}
+.cover .stack{position:absolute;left:var(--pad-x);top:390px;z-index:1}
+.cover .foot-l{position:absolute;left:var(--pad-x);bottom:56px;z-index:1}
+.cover .date{
+  display:inline-block;border:1.5px solid rgba(20,20,20,.35);border-radius:999px;
+  padding:11px 25px 13px;font-size:24px;line-height:1;
+}
+.orb{position:absolute;right:-830px;top:50%;transform:translateY(-50%);z-index:0}
+
+/* ---------- ask / closer ---------- */
+.closer h1{font-size:76px;font-weight:600;letter-spacing:-.03em;line-height:1.16}
+.closer .sub{font-size:36px;color:rgba(15,21,18,.62);margin-top:30px}
+.ask .stmt{font-size:62px;font-weight:500;letter-spacing:-.028em;line-height:1.24;max-width:1420px;margin-top:34px}
+
+@page{size:1920px 1080px;margin:0}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<path id="burst" d="M50.00,0.00 C54.59,-0.00 57.88,14.30 63.78,16.74 C69.67,19.18 82.11,11.40 85.36,14.64 C88.60,17.89 80.82,30.33 83.26,36.22 C85.70,42.12 100.00,45.41 100.00,50.00 C100.00,54.59 85.70,57.88 83.26,63.78 C80.82,69.67 88.60,82.11 85.36,85.36 C82.11,88.60 69.67,80.82 63.78,83.26 C57.88,85.70 54.59,100.00 50.00,100.00 C45.41,100.00 42.12,85.70 36.22,83.26 C30.33,80.82 17.89,88.60 14.64,85.36 C11.40,82.11 19.18,69.67 16.74,63.78 C14.30,57.88 0.00,54.59 0.00,50.00 C-0.00,45.41 14.30,42.12 16.74,36.22 C19.18,30.33 11.40,17.89 14.64,14.64 C17.89,11.40 30.33,19.18 36.22,16.74 C42.12,14.30 45.41,0.00 50.00,0.00 Z"/>
+</defs></svg>
+
+<!-- 1 · COVER -->
+<section class="slide light wavy cover">
+  <svg class="orb" width="1500" height="1500" viewBox="0 0 1500 1500">
+    <circle cx="750" cy="750" r="330" fill="#40FF00"/>
+    <circle cx="750" cy="750" r="452" fill="none" stroke="#40FF00" stroke-width="15"/>
+    <circle cx="750" cy="750" r="574" fill="none" stroke="#40FF00" stroke-width="13" opacity=".72"/>
+    <circle cx="750" cy="750" r="696" fill="none" stroke="#40FF00" stroke-width="11" opacity=".48"/>
+    <circle cx="750" cy="750" r="818" fill="none" stroke="#40FF00" stroke-width="9"  opacity=".30"/>
+    <circle cx="750" cy="750" r="940" fill="none" stroke="#40FF00" stroke-width="7"  opacity=".17"/>
+  </svg>
+  <div class="logo"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg><span>freedom.</span></div>
+  <div class="stack">
+    <h1>A payment network,<br><span class="g">built around people.</span></h1>
+    <p class="tag">The card scheme for how the world actually pays</p>
+  </div>
+  <div class="foot-l"><span class="date">September 2026</span></div>
+</section>
+
+<!-- 2 · THESIS -->
+<section class="slide light center">
+  <p class="kicker">our thesis</p>
+  <h1>The network is the product.</h1>
+  <p class="sub">Cards are only how you touch it</p>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 3 · PROBLEM -->
+<section class="slide dark">
+  <span class="badge">The problem</span>
+  <h2>Card networks are closed by design</h2>
+  <div class="body">
+    <div class="rows">
+      <div class="row"><svg class="star mint" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t">Two networks own the rails everyone else builds on</span></div>
+      <div class="row"><svg class="star mint" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t">Integrating with them is slow, rigid and expensive</span></div>
+      <div class="row"><svg class="star mint" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t">Acceptance hardware is rented, never owned</span></div>
+    </div>
+  </div>
+  <div class="foot"><p>*The cost of moving money is set by people who never built with you in mind.</p></div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 4 · SOLUTION -->
+<section class="slide light">
+  <span class="badge">The solution</span>
+  <h1>Freedom is a card scheme</h1>
+  <p class="lede">Built so the technology underneath is new, but the payment on top feels like something you already know</p>
+  <div class="body">
+    <div class="cols">
+      <div>
+        <svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <h3>A card people know</h3>
+        <p>No app to open and no behaviour to learn. It works the way a card is supposed to work.</p>
+      </div>
+      <div>
+        <svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <h3>A merchant network we own</h3>
+        <p>Visa and Mastercard had to build acceptance before anyone could spend. So are we.</p>
+      </div>
+      <div>
+        <svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <h3>Rails that stay open</h3>
+        <p>Cards, banks, wallets and stablecoins on one network, without a gatekeeper in the middle.</p>
+      </div>
+    </div>
+  </div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 5 · HOW IT WORKS -->
+<section class="slide dark">
+  <span class="badge">How it works</span>
+  <h2>Two sides. One network.</h2>
+  <div class="body">
+    <div class="sides">
+      <div class="side">
+        <p class="k">Consumer</p>
+        <p class="big">Tap &rarr; Pay</p>
+        <p class="d">A physical contactless card.</p>
+      </div>
+      <div class="side">
+        <p class="k">Merchant</p>
+        <p class="big">Phone &rarr; Accept</p>
+        <p class="d">A compatible phone becomes the acceptance device.</p>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <p>*No terminal to buy and none to maintain. The phone is the payment infrastructure.</p>
+    <p>*Static NFC identifiers are giving way to cryptographic credentials, making a card substantially harder to clone.</p>
+  </div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 6 · COVERAGE -->
+<section class="slide light">
+  <span class="badge">Coverage</span>
+  <h2>Live in four countries. Two ways in.</h2>
+  <div class="body">
+    <div class="cover-grid">
+      <div>
+        <p class="k">Pay-outs</p>
+        <div class="chips">
+          <span class="chip"><span class="fl">&#127475;&#127468;</span>Nigeria</span>
+          <span class="chip"><span class="fl">&#127472;&#127466;</span>Kenya</span>
+          <span class="chip"><span class="fl">&#127482;&#127468;</span>Uganda</span>
+          <span class="chip"><span class="fl">&#127481;&#127487;</span>Tanzania</span>
+        </div>
+      </div>
+      <div>
+        <p class="k">Pay-ins</p>
+        <div class="chips">
+          <span class="chip solid">NGN</span>
+          <span class="chip solid">Stablecoins</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><p>*A card scheme designed around Africa, not adapted to it.</p></div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 7 · OPPORTUNITY -->
+<section class="slide dark">
+  <span class="badge">The opportunity</span>
+  <h2>Nigeria already pays digitally</h2>
+  <div class="body">
+    <div class="stats">
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="v">&#8358;1.07 quadrillion</p><p class="l">Electronic payments, 2024</p></div>
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="v">11.2 billion</p><p class="l">Transactions, 2024</p></div>
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="v">5.56M</p><p class="l">POS terminals deployed</p></div>
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="v">&#8358;18 trillion</p><p class="l">POS transaction value, 2024</p></div>
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="v">100M+</p><p class="l">Nigerians outside the banking system</p></div>
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="v">&#8358;7 trillion</p><p class="l">In cash, sitting outside the banks</p></div>
+    </div>
+  </div>
+  <div class="foot"><p>*NIBSS, 2024. The question is not whether Nigerians can pay digitally &mdash; they already do. It is who owns the infrastructure they pay on.</p></div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 8 · WHY US -->
+<section class="slide light">
+  <span class="badge">Why us</span>
+  <h2>We are not starting from zero</h2>
+  <div class="body">
+    <div class="rows">
+      <div class="row"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t"><b>We acquired a bank</b><span class="d">Settlement runs on our own rails, not on a partner&rsquo;s.</span></span></div>
+      <div class="row"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t"><b>Cards are spending in four countries</b><span class="d">Funded in NGN and stablecoins, accepted today.</span></span></div>
+      <div class="row"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t"><b>The distribution is already there</b><span class="d">Enough reach to test a payment network at meaningful scale.</span></span></div>
+    </div>
+  </div>
+  <div class="foot"><p>*We are building bottom-up &mdash; breaking the stack into its parts and rebuilding each one, starting where the money actually sits.</p></div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 9 · BUSINESS MODEL -->
+<section class="slide dark">
+  <span class="badge">Business model</span>
+  <h2>We earn when the network is used</h2>
+  <div class="body">
+    <div class="model">
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <h3>Consumers</h3><p class="price">Card sales, interchange, cross-border</p>
+        <p>What we charge on the card itself and on every settlement.</p></div>
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <h3>Issuers &amp; acquirers</h3><p class="price">$0.05 per active card / month &middot; $0.10 per transaction</p>
+        <p>What a fintech pays to issue and acquire on Freedom.</p></div>
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <h3>Network usage</h3><p class="price">Priced per transaction</p>
+        <p>Authorization, clearing, settlement and access to the network.</p></div>
+      <div><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <h3>Value-added services</h3><p class="price">Fraud and risk APIs from $0.01 per check</p>
+        <p>The long game, and the highest margin line on the network.</p></div>
+    </div>
+  </div>
+  <div class="foot"><p>*Mastercard earned $13.3B from value-added services alone.</p></div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 10 · UNIT ECONOMICS -->
+<section class="slide light">
+  <span class="badge">Unit economics</span>
+  <h2>Every number, from the ground up</h2>
+  <div class="body">
+    <div class="rows math tight">
+      <div class="row"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t">What a cardholder spends
+          <span class="eq">2 transactions &times; $37.91 average = <b>$75 / month</b></span></span></div>
+      <div class="row"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t">Domestic &mdash; 90% of that volume
+          <span class="eq">$67.50 &times; 0.5% merchant charge = <b>$0.34</b></span></span></div>
+      <div class="row"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t">Cross-border &mdash; 10% of that volume
+          <span class="eq">$7.50 &times; 1.5%, uncapped = <b>$0.11</b></span></span></div>
+      <div class="row"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t">Revenue per active card
+          <span class="eq">$0.34 + $0.11 = <b>$0.45 / month &middot; $5.40 / year</b></span></span></div>
+      <div class="row hi"><svg class="star" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <span class="t">At 10 million active cards
+          <span class="eq">10M &times; $5.40 = <b>$4.5M / month &middot; $54M / year</b></span></span></div>
+    </div>
+  </div>
+  <div class="foot">
+    <p>*We capture the whole 0.5%, not a slice of it, because we are the scheme, the issuer and the acquirer. Visa and Mastercard net roughly 0.2% of volume as the network alone.</p>
+    <p>*Card issuance fees, partner-issuer fees and fraud APIs are revenue on top of this and are not counted here.</p>
+  </div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 11 · THE PATH -->
+<section class="slide dark">
+  <span class="badge">The path</span>
+  <h2>Ten million cards in twelve months</h2>
+  <div class="body">
+    <div class="phases">
+      <div class="phase"><svg class="star mint" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="k">Months 1&ndash;3</p><h3>Prove the loop</h3>
+        <p class="n">100K cards<br>$0.5M ARR</p>
+        <p>Merchant density first. A card is only worth carrying where it already spends.</p></div>
+      <div class="phase"><svg class="star mint" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="k">Months 4&ndash;8</p><h3>Compound the network</h3>
+        <p class="n">1.3M cards<br>$7M ARR</p>
+        <p>Every new merchant makes the card worth more, and every new card makes the merchant worth more.</p></div>
+      <div class="phase"><svg class="star mint" viewBox="0 0 100 100"><use href="#burst"/></svg>
+        <p class="k">Months 9&ndash;12</p><h3>Scale the rail</h3>
+        <p class="n">10M cards<br>$54M ARR</p>
+        <p>Nigeria at depth, then Kenya, Uganda and Tanzania on the same rail.</p></div>
+    </div>
+  </div>
+  <div class="foot"><p>*Ten million inside twelve months means roughly 67% month-on-month growth off a 100K base. That is the bar the distribution is being built to clear.</p></div>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 12 · CLOSER -->
+<section class="slide green wavy center closer">
+  <h1>Visa and Mastercard built the network for cards.<br>We are building it for programmable money.</h1>
+  <p class="sub">Cards, banks, wallets, stablecoins, merchants &mdash; and eventually, agents.</p>
+  <div class="mark">freedom.</div>
+</section>
+
+<!-- 13 · ASK -->
+<section class="slide light center ask">
+  <span class="badge">Our ask</span>
+  <p class="stmt">We are raising to grow the engineering team, fund the infrastructure the network runs on, and hold the settlement liquidity that lets it clear.</p>
+  <div class="mark">freedom.</div>
+</section>
+
+
+<!-- 14 · ASSUMPTIONS -->
+<section class="slide light">
+  <span class="badge">Assumptions</span>
+  <h2>Where each input comes from</h2>
+  <div class="body">
+    <div class="assume">
+      <div class="i"><span class="n">Average transaction size</span><span class="v">$37.91</span><span class="s">Observed across our own cardholders</span></div>
+      <div class="i"><span class="n">Merchant service charge, Nigeria</span><span class="v">0.5%, capped at &#8358;1,000</span><span class="s">CBN Guide to Charges &mdash; a ceiling, not our choice</span></div>
+      <div class="i"><span class="n">Transactions per card / month</span><span class="v">2.0</span><span class="s">We observe 2.4; we model 2.0</span></div>
+      <div class="i"><span class="n">Does the &#8358;1,000 cap bind?</span><span class="v">No</span><span class="s">It binds above &#8358;200,000 per transaction; we average &#8358;58,000</span></div>
+      <div class="i"><span class="n">Monthly spend per card</span><span class="v">$75</span><span class="s">2.0 &times; $37.91 = $75.82, rounded down</span></div>
+      <div class="i"><span class="n">Cross-border rate</span><span class="v">1.5% all-in</span><span class="s">Modelled. Scheme fee plus FX margin, outside the cap</span></div>
+      <div class="i"><span class="n">Share of the charge we keep</span><span class="v">100%</span><span class="s">Scheme, issuer and acquirer are the same company</span></div>
+      <div class="i"><span class="n">Exchange rate</span><span class="v">&#8358;1,530 = $1</span><span class="s">Used throughout</span></div>
+    </div>
+  </div>
+  <div class="foot"><p>*Every figure above is either observed in our own book or set by regulation. Nothing in the model requires a rate we have not already measured.</p></div>
+  <div class="mark">freedom.</div>
+</section>
+
+</body>
+</html>
