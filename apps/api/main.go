@@ -118,9 +118,9 @@ func main() {
 			go baseRail.Withdrawals.Run(context.Background(), apiv1.BasePollInterval())
 		}
 
-		// Sell each tap's USDC to the settlement gateway, from the
-		// cardholder's own account, so a liquidity provider pays the
-		// merchant's bank. This is what actually delivers a card payment.
+		// Sell each tap's USDC to Switch, from the cardholder's own
+		// account, so Switch pays the merchant's bank. This is what
+		// actually delivers a card payment.
 		if s := apiv1.SharedSettler(); s != nil {
 			go s.Run(context.Background(), settlementInterval())
 		}

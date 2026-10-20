@@ -42,12 +42,6 @@ type OrderConfiguration struct {
 	BaseSenderFeeBPS          int64  // sender fee skim charged on each order, in basis points (50 = 0.5%)
 	BaseNativeLowThresholdWei string // big.Int as string; below this we Slack-alert ops (native = ETH on Base)
 	BaseUSDCDecimals          int    // 6 on Base for Circle native USDC
-
-	// Settlement aggregator (default upstream: api.paycrest.io).
-	SettlementAPIURL           string
-	SettlementPubkeyTTLSeconds int
-	SettlementSenderAPIKeyID   string        // UUID identifying our sender for attribution + LP routing
-	SettlementPollInterval     time.Duration // cadence for advanceDispatching status polling
 }
 
 // OrderConfig sets the order configuration
@@ -66,9 +60,6 @@ func OrderConfig() *OrderConfiguration {
 	viper.SetDefault("BASE_SENDER_FEE_BPS", 50)                            // 0.5% sender fee
 	viper.SetDefault("BASE_NATIVE_LOW_THRESHOLD_WEI", "10000000000000000") // 0.01 ETH (Base L2 gas is cheap)
 	viper.SetDefault("BASE_USDC_DECIMALS", 6)
-	viper.SetDefault("SETTLEMENT_API_URL", "https://api.paycrest.io")
-	viper.SetDefault("SETTLEMENT_PUBKEY_CACHE_TTL_SECONDS", 3600)
-	viper.SetDefault("SETTLEMENT_POLL_INTERVAL_SECONDS", 30)
 
 	return &OrderConfiguration{
 		CardFeeBPS:                       viper.GetInt("CARD_FEE_BPS"),
@@ -88,10 +79,6 @@ func OrderConfig() *OrderConfiguration {
 		BaseSenderFeeBPS:                 viper.GetInt64("BASE_SENDER_FEE_BPS"),
 		BaseNativeLowThresholdWei:        viper.GetString("BASE_NATIVE_LOW_THRESHOLD_WEI"),
 		BaseUSDCDecimals:                 viper.GetInt("BASE_USDC_DECIMALS"),
-		SettlementAPIURL:                 viper.GetString("SETTLEMENT_API_URL"),
-		SettlementPubkeyTTLSeconds:       viper.GetInt("SETTLEMENT_PUBKEY_CACHE_TTL_SECONDS"),
-		SettlementSenderAPIKeyID:         viper.GetString("SETTLEMENT_SENDER_API_KEY_ID"),
-		SettlementPollInterval:           time.Duration(viper.GetInt("SETTLEMENT_POLL_INTERVAL_SECONDS")) * time.Second,
 	}
 }
 

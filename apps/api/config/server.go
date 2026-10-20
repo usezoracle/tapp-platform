@@ -29,7 +29,6 @@ type ServerConfiguration struct {
 	ExtraOrigins        string
 	AdminAPIToken       string
 	GoogleOAuthClientID string
-	SettlementAPIURL    string
 }
 
 // ServerConfig sets the server configuration
@@ -46,7 +45,6 @@ func ServerConfig() *ServerConfiguration {
 	viper.SetDefault("PWA_BASE_URL", "https://tapp.zoracle.com")
 	viper.SetDefault("ADMIN_API_TOKEN", "")
 	viper.SetDefault("GOOGLE_OAUTH_CLIENT_ID", "")
-	viper.SetDefault("SETTLEMENT_API_URL", "https://api.paycrest.io")
 
 	// Railway/Heroku/Cloud Run inject the listen port via PORT. Honour it when
 	// present so the app binds where the platform routes; otherwise fall back to
@@ -73,7 +71,6 @@ func ServerConfig() *ServerConfiguration {
 		ExtraOrigins:        viper.GetString("EXTRA_ORIGINS"),
 		AdminAPIToken:       viper.GetString("ADMIN_API_TOKEN"),
 		GoogleOAuthClientID: viper.GetString("GOOGLE_OAUTH_CLIENT_ID"),
-		SettlementAPIURL:    viper.GetString("SETTLEMENT_API_URL"),
 	}
 }
 

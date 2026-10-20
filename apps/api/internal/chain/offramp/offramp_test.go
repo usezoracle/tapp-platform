@@ -2,10 +2,7 @@ package offramp
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/pem"
+	"errors"
 	"math/big"
 	"strings"
 	"testing"
@@ -14,172 +11,283 @@ import (
 
 	"github.com/usezoracle/tapp/api/internal/chain/cdp"
 	"github.com/usezoracle/tapp/api/internal/money"
+	"github.com/usezoracle/tapp/api/services/onswitch"
 )
 
-// testPubkeyPEM is generated once per run rather than pasted in: a literal
-// key has to be a real one to survive parsing, and committing a real RSA key
-// -- even a public half whose private half was thrown away -- invites somebody
-// to assume it means something.
-var testPubkeyPEM = func() string {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		panic(err)
-	}
-	der, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	if err != nil {
-		panic(err)
-	}
-	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
-}()
+const (
+	cardholder = "0xb779226ee0f345b42681b981337205c918af8c3c"
+	depositTo  = "0x1111111111111111111111111111111111111111"
+	fundingTx  = "0x70b67e6948ea758eac499d7ac1967408f95ec961316d4f833f218671646c0f01"
+	tapRef     = "5b1f0a6e-7f53-4a8e-9a3c-2f9b8d6c1e47"
+)
+
+var usdcOnBase = common.HexToAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
 
 type fakeSender struct {
 	account string
 	calls   []cdp.Call
 	idem    string
+	sent    int
+	err     error
 }
 
 func (f *fakeSender) SendCalls(
 	_ context.Context, account string, calls []cdp.Call, idem string,
 ) (string, error) {
+	f.sent++
 	f.account, f.calls, f.idem = account, calls, idem
-	return "0xdeadbeef", nil
+	if f.err != nil {
+		return "", f.err
+	}
+	return fundingTx, nil
 }
 
-type fakeKeys struct{ pem string }
+// fakeSwitch holds payouts the way Switch does: by reference, opened by
+// Initiate, read by Status.
+type fakeSwitch struct {
+	payments  map[string]onswitch.Payment
+	initiated []onswitch.InitiateRequest
+	confirmed []string
+	deposit   float64
+	initErr   error
+}
 
-func (f fakeKeys) FetchPublicKey(context.Context) (string, error) { return f.pem, nil }
+func newSwitch() *fakeSwitch {
+	return &fakeSwitch{payments: map[string]onswitch.Payment{}, deposit: 1.194844}
+}
 
-func newClient(s *fakeSender) *Client {
-	return &Client{
-		Sender:  s,
-		Keys:    fakeKeys{pem: testPubkeyPEM},
-		Gateway: common.HexToAddress("0x30F6A8457F8E42371E204a9c103f2Bd42341dD0F"),
-		USDC:    common.HexToAddress("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+func (f *fakeSwitch) Status(_ context.Context, ref string) (onswitch.Payment, error) {
+	p, ok := f.payments[ref]
+	if !ok {
+		return onswitch.Payment{}, &onswitch.Error{Status: 404, Message: "Payment not found"}
 	}
+	return p, nil
+}
+
+func (f *fakeSwitch) Initiate(_ context.Context, r onswitch.InitiateRequest) (onswitch.Payment, error) {
+	f.initiated = append(f.initiated, r)
+	if f.initErr != nil {
+		return onswitch.Payment{}, f.initErr
+	}
+	p := onswitch.Payment{
+		Reference:   r.Reference,
+		Type:        "OFFRAMP",
+		Status:      onswitch.StatusAwaitingDeposit,
+		Source:      onswitch.Side{Amount: f.deposit, Currency: "USDC"},
+		Destination: onswitch.Side{Amount: r.Amount, Currency: r.Currency},
+		Deposit:     onswitch.Deposit{Address: depositTo, Amount: f.deposit, Asset: onswitch.Asset},
+	}
+	f.payments[r.Reference] = p
+	return p, nil
+}
+
+func (f *fakeSwitch) Confirm(_ context.Context, ref, hash string) error {
+	f.confirmed = append(f.confirmed, ref+" "+hash)
+	return nil
+}
+
+func (f *fakeSwitch) settle(ref, status string) {
+	p := f.payments[ref]
+	p.Status = status
+	f.payments[ref] = p
+}
+
+func newClient(s *fakeSender, sw *fakeSwitch) *Client {
+	return &Client{Sender: s, Switch: sw, USDC: usdcOnBase}
 }
 
 func order() Order {
 	return Order{
-		From:    "0xb779226ee0f345b42681b981337205c918af8c3c",
-		Sell:    big.NewInt(1_100_000), // $1.10 in USDC subunits
-		Deliver: money.Naira(1_500),    // ₦1,500.00
+		From:    cardholder,
+		Deliver: money.Naira(1_592),
 		Bank: Bank{
 			Institution:   "OPAYNGPC",
 			AccountNumber: "9034409271",
 			AccountName:   "OLUMIDE SILAS OGUNDELE",
 		},
-		Reference: "tap-1",
+		Reference: tapRef,
 	}
 }
 
-// The allowance and the call it was granted for must travel together. An
-// approve that lands alone leaves a contract able to spend the cardholder's
-// money; an order that lands alone reverts.
-func TestApproveAndCreateOrderAreOneOperation(t *testing.T) {
-	s := &fakeSender{}
-	c := newClient(s)
-
-	if _, err := c.Create(context.Background(), order()); err != nil {
-		t.Fatalf("Create: %v", err)
+func TestAPayoutIsOpenedForExactlyWhatTheMerchantIsOwed(t *testing.T) {
+	sw := newSwitch()
+	p, err := newClient(&fakeSender{}, sw).Open(context.Background(), order())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
 	}
-	if len(s.calls) != 2 {
-		t.Fatalf("sent %d calls, want 2 -- approve and createOrder together", len(s.calls))
+	if len(sw.initiated) != 1 {
+		t.Fatalf("initiated %d payouts, want 1", len(sw.initiated))
 	}
-	if s.calls[0].To != c.USDC {
-		t.Errorf("first call goes to %s, want the token so it can be approved", s.calls[0].To)
+	r := sw.initiated[0]
+	if !r.ExactOutput || r.Amount != 1592 || r.Currency != "NGN" || r.Country != "NG" ||
+		r.Channel != "BANK" || r.Asset != "base:usdc" {
+		t.Errorf("initiate = %+v, want exactly ₦1,592 to an NG bank from base:usdc", r.QuoteRequest)
 	}
-	if s.calls[1].To != c.Gateway {
-		t.Errorf("second call goes to %s, want the gateway", s.calls[1].To)
+	if r.Beneficiary.BankCode != "100004" || r.Beneficiary.AccountNumber != "9034409271" ||
+		r.Beneficiary.HolderName != "OLUMIDE SILAS OGUNDELE" {
+		t.Errorf("beneficiary = %+v, want OPay's Switch code and the verified name", r.Beneficiary)
 	}
-	// 0x095ea7b3 is approve(address,uint256).
-	if !strings.HasPrefix(s.calls[0].Data, "0x095ea7b3") {
-		t.Errorf("first call is not approve: %.10s", s.calls[0].Data)
+	if r.Reference != tapRef {
+		t.Errorf("reference = %s, want %s", r.Reference, tapRef)
 	}
-	// The idempotency key must carry the tap, or a retry opens a second order
-	// for one payment.
-	if !strings.Contains(s.idem, "tap-1") {
-		t.Errorf("idempotency key %q does not identify the tap", s.idem)
+	if p.Sell != 1_194_844 || p.Address != common.HexToAddress(depositTo) || p.Funded() {
+		t.Errorf("payment = %+v, want 1194844 to the deposit address, not yet funded", p)
 	}
 }
 
-// The order refunds to the cardholder, never to the platform. An order nobody
-// fills has to return to the person whose money it was -- that is what makes
-// this non-custodial rather than merely indirect.
-func TestAnUnfilledOrderRefundsToTheCardholder(t *testing.T) {
-	s := &fakeSender{}
-	c := newClient(s)
+// Refunds go to the person whose money it was, never to the platform.
+func TestAFailedPayoutRefundsToTheCardholder(t *testing.T) {
+	sw := newSwitch()
+	if _, err := newClient(&fakeSender{}, sw).Open(context.Background(), order()); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := sw.initiated[0].RefundAddress; got != cardholder {
+		t.Errorf("refund address = %s, want the cardholder %s", got, cardholder)
+	}
+}
+
+// An attempt that opened the payout and lost the answer finds it again.
+func TestAnOpenedPayoutIsFoundRatherThanOpenedTwice(t *testing.T) {
+	sw := newSwitch()
+	c := newClient(&fakeSender{}, sw)
+	if _, err := c.Open(context.Background(), order()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := c.Open(context.Background(), order())
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	if len(sw.initiated) != 1 {
+		t.Errorf("initiated %d payouts for one tap", len(sw.initiated))
+	}
+	if p.Sell != 1_194_844 {
+		t.Errorf("found payment sells %d", p.Sell)
+	}
+}
+
+func TestAPayoutForAnotherAmountIsRefused(t *testing.T) {
+	sw := newSwitch()
+	sw.payments[tapRef] = onswitch.Payment{
+		Reference: tapRef, Type: "OFFRAMP", Status: onswitch.StatusAwaitingDeposit,
+		Destination: onswitch.Side{Amount: 1500, Currency: "NGN"},
+		Deposit:     onswitch.Deposit{Address: depositTo, Amount: 1.1, Asset: onswitch.Asset},
+	}
+	_, err := newClient(&fakeSender{}, sw).Open(context.Background(), order())
+	if err == nil || !strings.Contains(err.Error(), "the merchant is owed") {
+		t.Fatalf("err = %v, want the amount refused", err)
+	}
+}
+
+func TestABankSwitchCannotNameIsRefused(t *testing.T) {
+	sw := newSwitch()
 	o := order()
-
-	if _, err := c.Create(context.Background(), o); err != nil {
-		t.Fatalf("Create: %v", err)
+	o.Bank.Institution = "NOPENGPC"
+	_, err := newClient(&fakeSender{}, sw).Open(context.Background(), o)
+	var unmapped *onswitch.UnmappedBankError
+	if !errors.As(err, &unmapped) {
+		t.Fatalf("err = %v, want an unmapped bank", err)
 	}
-	// The refund address is the 6th argument; find it in the calldata rather
-	// than re-deriving the encoding.
-	from := strings.ToLower(strings.TrimPrefix(o.From, "0x"))
-	if !strings.Contains(strings.ToLower(s.calls[1].Data), from) {
-		t.Errorf("createOrder calldata does not name %s as the refund address", o.From)
-	}
-	if s.account != o.From {
-		t.Errorf("sent from %s, want the cardholder's own account %s", s.account, o.From)
+	if len(sw.initiated) != 0 {
+		t.Error("a payout was opened to a bank with no Switch code")
 	}
 }
 
-// The rate is what the provider fills at, so it has to be the price the ledger
-// already moved -- fiat per whole token, scaled by 100 for the uint96.
-func TestTheRateIsFiatPerTokenScaledByAHundred(t *testing.T) {
-	c := newClient(&fakeSender{})
-
-	for _, tc := range []struct {
-		name    string
-		sell    int64
-		deliver money.Amount
-		want    int64
-	}{
-		// $1.00 buying ₦1,500.00 is 1500.00 per token -> 150000.
-		{"a round dollar", 1_000_000, money.Naira(1_500), 150_000},
-		// $1.10 buying ₦1,500.00 is 1363.6363... -> 136364 after rounding.
-		{"an awkward amount", 1_100_000, money.Naira(1_500), 136_364},
-		// Half a dollar for half the naira is the same price.
-		{"scale invariance", 500_000, money.Naira(750), 150_000},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := c.rate(Order{Sell: big.NewInt(tc.sell), Deliver: tc.deliver})
-			if err != nil {
-				t.Fatalf("rate: %v", err)
-			}
-			if got.Int64() != tc.want {
-				t.Errorf("rate = %d, want %d", got.Int64(), tc.want)
-			}
-		})
-	}
-}
-
-// Unverified or missing bank details must never reach the chain: the recipient
-// blob is what a provider pays against, and a wrong number does not come back.
 func TestAnIncompleteBankIsRefused(t *testing.T) {
-	c := newClient(&fakeSender{})
-	for _, missing := range []string{"institution", "number", "name"} {
-		o := order()
-		switch missing {
-		case "institution":
-			o.Bank.Institution = ""
-		case "number":
-			o.Bank.AccountNumber = ""
-		case "name":
-			o.Bank.AccountName = ""
+	o := order()
+	o.Bank.AccountName = ""
+	if _, err := newClient(&fakeSender{}, newSwitch()).Open(context.Background(), o); err == nil {
+		t.Fatal("a payout was opened without a verified name")
+	}
+}
+
+func TestNoProviderMeansNoPayout(t *testing.T) {
+	_, err := (&Client{Sender: &fakeSender{}}).Open(context.Background(), order())
+	if !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("err = %v, want ErrNotConfigured", err)
+	}
+}
+
+// Funding is one transfer of exactly what Switch asked for, to the address it
+// gave, keyed on the payout so a retry cannot send twice; then confirmed.
+func TestFundingIsOneTransferToTheDepositAddress(t *testing.T) {
+	sw, s := newSwitch(), &fakeSender{}
+	c := newClient(s, sw)
+	p, err := c.Open(context.Background(), order())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, err := c.Fund(context.Background(), cardholder, p)
+	if err != nil {
+		t.Fatalf("Fund: %v", err)
+	}
+	if hash != fundingTx {
+		t.Errorf("hash = %s", hash)
+	}
+	if s.account != cardholder || s.idem != "offramp:"+tapRef {
+		t.Errorf("sent from %s as %q", s.account, s.idem)
+	}
+	if len(s.calls) != 1 || s.calls[0].To != usdcOnBase {
+		t.Fatalf("calls = %+v, want one call to USDC", s.calls)
+	}
+	data := common.FromHex(s.calls[0].Data)
+	if to := common.BytesToAddress(data[4:36]); to != common.HexToAddress(depositTo) {
+		t.Errorf("transfer to %s, want the deposit address", to)
+	}
+	if amount := new(big.Int).SetBytes(data[36:68]).Int64(); amount != 1_194_844 {
+		t.Errorf("transfer of %d, want 1194844", amount)
+	}
+	if len(sw.confirmed) != 1 || sw.confirmed[0] != tapRef+" "+fundingTx {
+		t.Errorf("confirmed = %v", sw.confirmed)
+	}
+}
+
+func TestStatusesMapToOutcomes(t *testing.T) {
+	for status, want := range map[string]Outcome{
+		onswitch.StatusAwaitingDeposit: Open,
+		onswitch.StatusProcessing:      Open,
+		onswitch.StatusScheduled:       Open,
+		onswitch.StatusBlocked:         Open,
+		onswitch.StatusCompleted:       Fulfilled,
+		onswitch.StatusFailed:          Refunded,
+		onswitch.StatusReversed:        Refunded,
+	} {
+		sw := newSwitch()
+		c := newClient(&fakeSender{}, sw)
+		if _, err := c.Open(context.Background(), order()); err != nil {
+			t.Fatal(err)
 		}
-		if _, err := c.Create(context.Background(), o); err == nil {
-			t.Errorf("an order with no %s was accepted", missing)
+		sw.settle(tapRef, status)
+		got, reported, err := c.Outcome(context.Background(), tapRef, fundingTx)
+		if err != nil || got != want || reported != status {
+			t.Errorf("%s: outcome %v (%s) err %v, want %v", status, got, reported, err, want)
 		}
 	}
 }
 
-// Without a gateway there is nothing to sell into, and saying so is better
-// than sending a transaction to the zero address.
-func TestNoGatewayMeansNoOrder(t *testing.T) {
-	c := newClient(&fakeSender{})
-	c.Gateway = common.Address{}
-	if _, err := c.Create(context.Background(), order()); err != ErrNotConfigured {
-		t.Fatalf("err = %v, want ErrNotConfigured", err)
+// A payout still waiting for its deposit after funding is confirmed again.
+func TestAWaitingPayoutIsConfirmedAgain(t *testing.T) {
+	sw := newSwitch()
+	c := newClient(&fakeSender{}, sw)
+	if _, err := c.Open(context.Background(), order()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.Outcome(context.Background(), tapRef, fundingTx); err != nil {
+		t.Fatal(err)
+	}
+	if len(sw.confirmed) != 1 {
+		t.Errorf("confirmed %d times, want once", len(sw.confirmed))
+	}
+}
+
+func TestAnUnknownStatusIsNeverGuessed(t *testing.T) {
+	sw := newSwitch()
+	c := newClient(&fakeSender{}, sw)
+	if _, err := c.Open(context.Background(), order()); err != nil {
+		t.Fatal(err)
+	}
+	sw.settle(tapRef, "EXPIRED")
+	got, _, err := c.Outcome(context.Background(), tapRef, fundingTx)
+	if err == nil || got != Open {
+		t.Errorf("outcome %v err %v, want Open and an error", got, err)
 	}
 }

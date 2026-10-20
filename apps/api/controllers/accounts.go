@@ -6,19 +6,20 @@
 package controllers
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	u "github.com/usezoracle/tapp/api/utils"
 
 	fastshot "github.com/opus-domini/fast-shot"
+	"github.com/usezoracle/tapp/api/config"
 	"github.com/usezoracle/tapp/api/ent/fiatcurrency"
 	"github.com/usezoracle/tapp/api/ent/institution"
 	"github.com/usezoracle/tapp/api/ent/providerprofile"
+	"github.com/usezoracle/tapp/api/services/onswitch"
 	"github.com/usezoracle/tapp/api/storage"
 	"github.com/usezoracle/tapp/api/types"
 	"github.com/usezoracle/tapp/api/utils/logger"
@@ -80,42 +81,33 @@ func (ctrl *Controller) VerifyAccount(ctx *gin.Context) {
 		return
 	}
 
-	// Try live-verifying with settlement API if configured.
-	// SETTLEMENT_API_URL is the versioned root (e.g. "https://api.paycrest.io/v1")
-	// per services/settlement convention, but verify-account lives at
-	// /v2/verify-account — so we strip the trailing /v1 before composing.
-	// Stay aligned with services/settlement/client.go FetchRate's URL build.
-	settlementURL := strings.TrimSuffix(serverConf.SettlementAPIURL, "/v1")
-	if settlementURL != "" {
-		pcPayload := map[string]string{
-			"institution":       payload.Institution,
-			"accountIdentifier": payload.AccountIdentifier,
+	// Ask the bank, through Switch, whose account this is. Switch is what
+	// pays this account later, so its answer is the one that counts: a name
+	// is the verified name, and a refusal is final rather than a reason to
+	// ask somewhere else.
+	if switchConf := config.SwitchConfig(); switchConf.Enabled() {
+		bankCode, err := onswitch.BankCode(payload.Institution)
+		if err != nil {
+			u.APIResponse(ctx, http.StatusBadRequest, "error", "Failed to validate payload", []types.ErrorData{{
+				Field:   "Institution",
+				Message: "Institution is not supported",
+			}})
+			return
 		}
-		res, err := fastshot.NewClient(settlementURL).
-			Config().SetTimeout(15*time.Second).
-			Header().Add("Content-Type", "application/json").
-			Build().POST("/v2/verify-account").
-			Body().AsJSON(pcPayload).
-			Send()
-		if err == nil {
-			defer res.RawResponse.Body.Close()
-			if res.StatusCode() == http.StatusOK {
-				var pcResp struct {
-					Status  string `json:"status"`
-					Message string `json:"message"`
-					Data    string `json:"data"`
-				}
-				if decodeErr := json.NewDecoder(res.RawResponse.Body).Decode(&pcResp); decodeErr == nil && pcResp.Status == "success" {
-					u.APIResponse(ctx, http.StatusOK, "success", "Account name was fetched successfully", pcResp.Data)
-					return
-				}
-				logger.Warnf("settlement verify-account returned 200 but unexpected body — falling back")
-			} else {
-				logger.Warnf("settlement verify-account http %d — falling back", res.StatusCode())
-			}
-		} else {
-			logger.Warnf("settlement verify-account transport error: %v — falling back", err)
+		name, err := onswitch.New(switchConf.BaseURL, switchConf.ServiceKey).
+			AccountName(ctx.Request.Context(), onswitch.Country, bankCode, payload.AccountIdentifier)
+		var refused *onswitch.Error
+		switch {
+		case err == nil && name != "":
+			u.APIResponse(ctx, http.StatusOK, "success", "Account name was fetched successfully", name)
+		case err == nil, errors.As(err, &refused) && refused.Status < 500:
+			logger.Warnf("switch account lookup refused %s at %s: %v", payload.AccountIdentifier, payload.Institution, err)
+			u.APIResponse(ctx, http.StatusBadRequest, "error", "Failed to verify account", nil)
+		default:
+			logger.Errorf("switch account lookup: %v", err)
+			u.APIResponse(ctx, http.StatusServiceUnavailable, "error", "Failed to verify account", nil)
 		}
+		return
 	}
 
 	// Fallback to local database and provider profiles

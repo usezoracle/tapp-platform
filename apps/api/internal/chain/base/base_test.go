@@ -14,9 +14,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/usezoracle/tapp/api/internal/ledger"
+	"github.com/usezoracle/tapp/api/internal/ledger/movements"
 	"github.com/usezoracle/tapp/api/internal/money"
 	"github.com/usezoracle/tapp/api/internal/platform/migrate"
 )
@@ -459,6 +461,70 @@ func TestARefundFromTheGatewayIsNotADeposit(t *testing.T) {
 		t.Fatalf("credited %d deposits, want 1 -- the refund was counted as money arriving", credited)
 	}
 
+	b, err := ledger.Balance(ctx, deposits.Pool, ledger.User(user), ledger.KindAvailable, money.USD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Minor() != 120 {
+		t.Errorf("balance = %s, want $1.20 -- the refund was credited as a deposit", b)
+	}
+}
+
+// A Switch payout that fails is refunded to the cardholder's account, from
+// the deposit address the tap's USDC was sent to. That is the same money
+// coming back, and crediting it would pay the cardholder twice for one tap.
+func TestARefundFromASwitchDepositAddressIsNotADeposit(t *testing.T) {
+	addrs, deposits := fixture(t)
+	ctx := context.Background()
+	user, merchant, tap := uuid.New(), uuid.New(), uuid.New()
+
+	address, err := addrs.For(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amount := money.Naira(1_600)
+	if _, err := movements.Deposit(ctx, deposits.Pool, user, amount, "bank", uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
+	if err := movements.InTx(ctx, deposits.Pool, func(tx pgx.Tx) error {
+		ledgerTx, err := movements.Tap(ctx, tx, user, merchant, amount, money.Naira(8), tap)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `
+			INSERT INTO card_taps (id, card_id, cardholder_id, merchant_id, currency,
+			                       amount_minor, fee_minor, tier, funded_usdc_minor, ledger_tx_id, nonce)
+			VALUES ($1, $2, $3, $4, 'NGN', $5, 800, 'none', $5, $6, $7)`,
+			tap, uuid.New(), user, merchant, amount.Minor(), ledgerTx, uuid.NewString())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	switchDeposit := "0x2222222222222222222222222222222222222222"
+	if _, err := deposits.Pool.Exec(ctx, `
+		INSERT INTO offramp_payments (reference, tap_id, round, deposit_address, sell_micro)
+		VALUES ($1, $2, 0, $3, 1194844)`, tap.String(), tap, switchDeposit); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: "0x00000000000000000000000000000000000000A1",
+		To: address, AmountMicro: 1_208_679, BlockNumber: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: switchDeposit,
+		To: address, AmountMicro: 1_194_844, BlockNumber: 101,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if credited, err := deposits.CreditConfirmed(ctx, 200); err != nil {
+		t.Fatalf("CreditConfirmed: %v", err)
+	} else if credited != 1 {
+		t.Fatalf("credited %d deposits, want 1 -- the refund was counted as money arriving", credited)
+	}
 	b, err := ledger.Balance(ctx, deposits.Pool, ledger.User(user), ledger.KindAvailable, money.USD)
 	if err != nil {
 		t.Fatal(err)

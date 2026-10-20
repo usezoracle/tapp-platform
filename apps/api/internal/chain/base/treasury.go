@@ -218,19 +218,6 @@ func PackTransfer(to common.Address, amount *big.Int) (string, error) {
 	return "0x" + common.Bytes2Hex(data), nil
 }
 
-// PackApprove builds approve(spender, amount) calldata.
-//
-// Needed because the offramp Gateway pulls the tokens itself rather than
-// being sent them: the allowance and the call that consumes it travel
-// together in one sponsored operation, so no allowance is ever left standing.
-func PackApprove(spender common.Address, amount *big.Int) (string, error) {
-	data, err := parsedERC20.Pack("approve", spender, amount)
-	if err != nil {
-		return "", fmt.Errorf("base: pack approve: %w", err)
-	}
-	return "0x" + common.Bytes2Hex(data), nil
-}
-
 // TreasuryKey returns the signer for withdrawals.
 func (c *Chain) TreasuryKey() *ecdsa.PrivateKey { return c.treasuryKey }
 

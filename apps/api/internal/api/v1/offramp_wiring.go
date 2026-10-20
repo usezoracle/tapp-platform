@@ -3,7 +3,6 @@ package v1
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/jackc/pgx/v5"
@@ -18,7 +17,7 @@ import (
 	"github.com/usezoracle/tapp/api/internal/rates"
 	"github.com/usezoracle/tapp/api/internal/settlement/naira"
 	"github.com/usezoracle/tapp/api/services/baas"
-	paycrest "github.com/usezoracle/tapp/api/services/settlement"
+	"github.com/usezoracle/tapp/api/services/onswitch"
 	"github.com/usezoracle/tapp/api/storage"
 	"github.com/usezoracle/tapp/api/utils/logger"
 )
@@ -32,23 +31,23 @@ var (
 // cannot sell.
 //
 // Nil is a working state, not a broken one: taps still charge, and their
-// settlement rows accumulate until a gateway is configured and a later tick
-// drains them. What must never happen is a tap failing because the chain is
+// settlement rows accumulate until Switch is configured and a later tick
+// drains them. What must never happen is a tap failing because a provider is
 // unreachable -- the cardholder is at a till and their money has already
 // moved.
 func SharedSettler() *offramp.Settler {
 	settlerOnce.Do(func() {
-		gateway := viper.GetString("BASE_GATEWAY_CONTRACT")
-		if gateway == "" {
-			logger.Infof("offramp: no BASE_GATEWAY_CONTRACT -- taps will charge and " +
+		switchCfg := config.SwitchConfig()
+		if !switchCfg.Enabled() {
+			logger.Infof("offramp: no SWITCH_SERVICE_KEY -- taps will charge and " +
 				"queue for settlement, but nothing will be sold")
 			return
 		}
 
 		cdpCfg := config.CDPConfig()
 		if !cdpCfg.Enabled() {
-			logger.Errorf("offramp: a gateway is configured but CDP is not, so no " +
-				"cardholder account can sign an order")
+			logger.Errorf("offramp: Switch is configured but CDP is not, so no " +
+				"cardholder account can fund a payout")
 			return
 		}
 		chainID := config.OrderConfig().BaseChainID
@@ -62,48 +61,16 @@ func SharedSettler() *offramp.Settler {
 			return
 		}
 
-		keys := paycrest.New(
-			config.OrderConfig().SettlementAPIURL+"/v1",
-			time.Duration(config.OrderConfig().SettlementPubkeyTTLSeconds)*time.Second,
-		)
-
-		// Outcomes are read through the rail's own client: one connection to
-		// the chain, and the settler cannot exist without the deposit
-		// accounts it sells from anyway.
-		var reader offramp.Reader
-		if r := Rail(); r != nil && r.Chain != nil && r.Chain.Client != nil {
-			reader = r.Chain.Client
-		} else {
-			logger.Errorf("offramp: no Base rail, so orders can be created but " +
-				"never followed to fulfilled or refunded")
-		}
-
 		settler = &offramp.Settler{
-			Pool:  storage.Pool,
-			Price: priceWith(keys, settlementNetwork(chainID)),
+			Pool: storage.Pool,
 			Orders: &offramp.Client{
-				Sender:  signer,
-				Keys:    keys,
-				Reader:  reader,
-				Gateway: common.HexToAddress(gateway),
-				USDC:    common.HexToAddress(viper.GetString("BASE_USDC_CONTRACT")),
-				// No on-chain sender fee.
-				//
-				// The platform's margin is already taken at the till, booked
-				// to revenue in fiat when the tap posts. Charging it again
-				// here would take the same cut twice -- once in the ledger and
-				// once out of the tokens -- and the second one would come out
-				// of what the merchant receives.
-				//
-				// A deployment that would rather earn on chain sets a
-				// recipient and drops the card fee, but it must be one or the
-				// other.
-				SenderFeeBPS: 0,
-				FeeRecipient: common.HexToAddress(viper.GetString("BASE_FEE_RECIPIENT")),
+				Sender: signer,
+				Switch: onswitch.New(switchCfg.BaseURL, switchCfg.ServiceKey),
+				USDC:   common.HexToAddress(viper.GetString("BASE_USDC_CONTRACT")),
 			},
 		}
-		logger.Infof("offramp: card taps settle through gateway %s on chain %d, "+
-			"sold from each cardholder's own account", gateway, chainID)
+		logger.Infof("offramp: card taps settle through Switch (%s), "+
+			"sold from each cardholder's own account on chain %d", switchCfg.BaseURL, chainID)
 	})
 	return settler
 }
@@ -117,8 +84,7 @@ func SharedSettler() *offramp.Settler {
 //   - what the cardholder paid from a naira balance is paid to the merchant
 //     straight out of the cardholder's own wallet at the bank rail;
 //   - what the cardholder had to buy by converting USDC is paid by selling
-//     that USDC on chain to the settlement gateway, where a liquidity
-//     provider pays the merchant.
+//     that USDC to Switch, which pays the merchant's bank.
 //
 // One tap can have both legs, and each is recorded in the tap's own
 // transaction. Either leg that cannot be recorded -- no wallet, no bank
@@ -143,7 +109,7 @@ func RecordTapSettlement(s *offramp.Settler) func(context.Context, pgx.Tx, tap.C
 		}
 
 		if s == nil {
-			// No gateway: the tap charges and nothing is recorded for this
+			// No Switch: the tap charges and nothing is recorded for this
 			// leg, as before the naira leg existed. See SharedSettler.
 			return nil
 		}
@@ -209,54 +175,6 @@ func sellFor(ctx context.Context, owed money.Amount) (int64, error) {
 		return 0, errNoRate
 	}
 	return micro.BigInt().Int64(), nil
-}
-
-// priceWith prices an order at the aggregator's own sell-side rate for the
-// amount being sold, which is the only rate its matcher will accept.
-//
-// The rate depends on the amount -- providers serve different size brackets
-// at different prices -- and the amount depends on the rate. One pass from
-// the recorded estimate lands in the right bracket almost always; a second
-// pass with the amount that pass produced catches the case where it did not.
-// The sale is rounded UP, so the order delivers at least what the merchant
-// is owed, and the order's rate (what it delivers over what it sells) sits
-// a fraction of a kobo under the quote rather than over it.
-func priceWith(p *paycrest.Client, network string) func(context.Context, money.Amount, int64) (int64, error) {
-	return func(ctx context.Context, owed money.Amount, estimate int64) (int64, error) {
-		fiat := decimal.NewFromInt(owed.Minor()).Div(decimal.NewFromInt(owed.Currency().Scale()))
-		sell := decimal.NewFromInt(estimate).Div(decimal.New(1, 6))
-
-		for pass := 0; pass < 2; pass++ {
-			q, err := p.FetchRate(ctx, network, "USDC", sell, string(owed.Currency()))
-			if err != nil {
-				return 0, err
-			}
-			if q.Rate.Sign() <= 0 {
-				return 0, errNoRate
-			}
-			next := fiat.Div(q.Rate).Mul(decimal.New(1, 6)).Ceil().Div(decimal.New(1, 6))
-			if next.Equal(sell) {
-				break
-			}
-			sell = next
-		}
-
-		micro := sell.Mul(decimal.New(1, 6))
-		if micro.Sign() <= 0 || !micro.BigInt().IsInt64() {
-			return 0, errNoRate
-		}
-		return micro.BigInt().Int64(), nil
-	}
-}
-
-// settlementNetwork is the aggregator's name for a chain, which is not its id.
-func settlementNetwork(chainID int64) string {
-	switch chainID {
-	case 84532:
-		return "base-sepolia"
-	default:
-		return "base"
-	}
 }
 
 var (

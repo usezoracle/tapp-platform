@@ -105,6 +105,19 @@ func (d *Deposits) Record(ctx context.Context, t Transfer) error {
 		return nil
 	}
 
+	// A Switch deposit address is the third. Each one was paid by a tap, and
+	// USDC coming back from it is that tap's payout refunded: the same money
+	// the gateway refunds above, by a different road.
+	var refund bool
+	if err := d.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM offramp_payments WHERE deposit_address = $1)`,
+		strings.ToLower(t.From)).Scan(&refund); err != nil {
+		return fmt.Errorf("base: check payout refund: %w", err)
+	}
+	if refund {
+		return nil
+	}
+
 	_, err = d.Pool.Exec(ctx, `
 		INSERT INTO base_deposits
 			(user_id, tx_hash, log_index, from_address, to_address, amount_micro, block_number)

@@ -2,11 +2,9 @@ package offramp
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"strings"
 	"time"
 
@@ -50,29 +48,28 @@ type Execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// Settler turns taps into settlement orders.
+// Settler turns taps into Switch payouts.
 //
-// Separate from the tap itself on purpose. Creating an order is an on-chain
+// Separate from the tap itself on purpose. Funding a payout is an on-chain
 // operation, and the cardholder is standing at a till: making the tap wait for
 // a chain confirmation would put a provider's latency between somebody and
 // their coffee. The tap authorises against the ledger and finishes; this
 // follows moments later.
 type Settler struct {
 	Pool   *pgxpool.Pool
-	Orders *Client
+	Orders Rail
 	Now    func() time.Time
+}
 
-	// Price says how much USDC to sell for what the merchant is owed, at the
-	// moment the order is created. Estimate is what the tap recorded.
-	//
-	// The order's rate is not ours to choose. The aggregator assigns an
-	// order to a provider only when its rate is within a few kobo of that
-	// provider's own, for that amount, at that moment; an order priced from
-	// a rate fetched at the till, for a different amount, is an order nobody
-	// is allowed to fill, and it comes back refunded. So the price is asked
-	// for again here, where the amount and the moment are both known, and
-	// asked for again on every round. Nil sells the estimate as recorded.
-	Price func(ctx context.Context, deliver money.Amount, estimate int64) (int64, error)
+// Rail is the provider a tap's USDC is sold through. Satisfied by Client.
+//
+// Three steps, so the payout can be written down between opening it and
+// funding it: the deposit address is recorded before any money moves, which
+// is what lets the deposit watcher recognise a refund from it.
+type Rail interface {
+	Open(ctx context.Context, o Order) (Payment, error)
+	Fund(ctx context.Context, from string, p Payment) (string, error)
+	Outcome(ctx context.Context, reference, txHash string) (Outcome, string, error)
 }
 
 func (s *Settler) now() time.Time {
@@ -167,8 +164,7 @@ func (s *Settler) Tick(ctx context.Context) (created int, err error) {
 			// What the MERCHANT receives from this leg: the tap less the
 			// platform's fee, less whatever the naira leg pays. Selling
 			// against the gross would deliver them money the ledger says is
-			// ours, and pairing that with an on-chain sender fee would take
-			// the same margin twice.
+			// ours.
 			cur   string
 			minor int64
 		)
@@ -187,36 +183,12 @@ func (s *Settler) Tick(ctx context.Context) (created int, err error) {
 	}
 
 	for _, p := range due {
-		if s.Price != nil {
-			sell, err := s.Price(ctx, p.deliver, p.sell)
-			if err != nil {
-				// Nothing was sent, so nothing is counted; the next tick
-				// asks again. A provider that cannot quote is not a reason
-				// to sell at a price it will not fill.
-				slog.Warn("offramp: could not price a tap settlement, will retry",
-					"tap", p.tap, "err", err)
-				continue
-			}
-			if sell != p.sell {
-				// The row says what was actually sold: the tracker matches
-				// the order's event on it, and an operator reading the row
-				// should see the same number the chain does.
-				if _, err := s.Pool.Exec(ctx, `
-					UPDATE card_tap_settlements
-					   SET sell_micro = $2, updated_at = now()
-					 WHERE tap_id = $1 AND state = 'pending'`, p.tap, sell); err != nil {
-					return created, err
-				}
-				p.sell = sell
-			}
-		}
-
 		// The attempt is counted BEFORE the call, not after.
 		//
-		// createOrder can be accepted by the chain and still fail to answer
-		// us. Counting afterwards would leave a submitted order looking
-		// untried, and the next tick would sell the cardholder's money a
-		// second time. The idempotency key on the tap is the other half of
+		// The transfer can land on chain and still fail to answer us.
+		// Counting afterwards would leave a funded payout looking untried,
+		// and the next tick would sell the cardholder's money a second time.
+		// The reference on the payout and the operation is the other half of
 		// that guarantee; this is the half that survives a crash.
 		if _, err := s.Pool.Exec(ctx, `
 			UPDATE card_tap_settlements
@@ -225,93 +197,134 @@ func (s *Settler) Tick(ctx context.Context) (created int, err error) {
 			return created, err
 		}
 
-		txHash, err := s.Orders.Create(ctx, Order{
+		ref := reference(p.tap, p.round)
+		pay, err := s.Orders.Open(ctx, Order{
 			From:      p.from,
-			Sell:      big.NewInt(p.sell),
 			Deliver:   p.deliver,
 			Bank:      p.bank,
-			Reference: reference(p.tap, p.round),
+			Reference: ref,
 		})
 		if err != nil {
-			final := p.attempts+1 >= MaxAttempts
-			state := "pending"
-			if final {
-				state = "failed"
-			}
-			if _, e := s.Pool.Exec(ctx, `
-				UPDATE card_tap_settlements
-				   SET state = $2, last_error = $3, updated_at = now()
-				 WHERE tap_id = $1`, p.tap, state, err.Error()); e != nil {
-				return created, e
-			}
-			if final {
-				slog.Error("offramp: giving up on a tap settlement",
-					"tap", p.tap, "attempts", p.attempts+1, "err", err)
-			} else {
-				slog.Warn("offramp: tap settlement failed, will retry",
-					"tap", p.tap, "attempt", p.attempts+1, "err", err)
+			if err := s.attemptFailed(ctx, p.tap, p.attempts, err); err != nil {
+				return created, err
 			}
 			continue
+		}
+
+		// Written down before any money moves: the address the USDC goes to,
+		// so a refund from it is never credited as a deposit, and the amount
+		// Switch priced, so the row says what was actually sold.
+		if err := movements.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO offramp_payments (reference, tap_id, round, deposit_address, sell_micro)
+				VALUES ($1, $2, $3, $4, $5)
+				ON CONFLICT (reference) DO NOTHING`,
+				ref, p.tap, p.round, strings.ToLower(pay.Address.Hex()), pay.Sell); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `
+				UPDATE card_tap_settlements
+				   SET sell_micro = $2, updated_at = now()
+				 WHERE tap_id = $1`, p.tap, pay.Sell)
+			return err
+		}); err != nil {
+			return created, fmt.Errorf("offramp: record payout %s for tap %s: %w", ref, p.tap, err)
+		}
+
+		var txHash *string
+		if !pay.Funded() {
+			hash, err := s.Orders.Fund(ctx, p.from, pay)
+			if err != nil {
+				if err := s.attemptFailed(ctx, p.tap, p.attempts, err); err != nil {
+					return created, err
+				}
+				continue
+			}
+			txHash = &hash
 		}
 
 		// Marking it submitted and discharging what the merchant is owed
 		// commit together.
 		//
-		// The order is already on chain either way, so the question is only
-		// what the books say about it. A submitted order with the claim still
+		// The USDC is with Switch either way, so the question is only what
+		// the books say about it. A submitted payout with the claim still
 		// standing would have us owing money a provider has been paid to
-		// deliver; a discharged claim with no record of the order would lose
-		// the only thing tying it to a transaction.
+		// deliver; a discharged claim with no record of the payout would lose
+		// the only thing tying it to Switch.
 		if err := movements.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 			if _, err := tx.Exec(ctx, `
 				UPDATE card_tap_settlements
-				   SET state = 'submitted', tx_hash = $2, last_error = NULL, updated_at = now()
-				 WHERE tap_id = $1`, p.tap, txHash); err != nil {
+				   SET state = 'submitted', tx_hash = $2, order_id = $3,
+				       last_error = NULL, updated_at = now()
+				 WHERE tap_id = $1`, p.tap, txHash, ref); err != nil {
 				return err
 			}
 			_, err := movements.MerchantSettledOnChain(ctx, tx, p.merchant, p.deliver, p.tap, p.round)
 			return err
 		}); err != nil {
-			// The order is on chain. Failing here loses only our note of it,
+			// The payout is funded. Failing here loses only our note of it,
 			// and the attempt counter above stops it being sold again.
-			return created, fmt.Errorf("offramp: record submitted order for tap %s (tx %s): %w",
-				p.tap, txHash, err)
+			return created, fmt.Errorf("offramp: record submitted payout %s for tap %s: %w",
+				ref, p.tap, err)
 		}
 		created++
 	}
 	return created, nil
 }
 
-// reference is the idempotency key of one round's order.
+// attemptFailed records an attempt that moved no money, leaving the tap for
+// the next tick or, after MaxAttempts, failed and visible.
+func (s *Settler) attemptFailed(ctx context.Context, tap uuid.UUID, attempts int, cause error) error {
+	final := attempts+1 >= MaxAttempts
+	state := "pending"
+	if final {
+		state = "failed"
+	}
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE card_tap_settlements
+		   SET state = $2, last_error = $3, updated_at = now()
+		 WHERE tap_id = $1`, tap, state, cause.Error()); err != nil {
+		return err
+	}
+	if final {
+		slog.Error("offramp: giving up on a tap settlement",
+			"tap", tap, "attempts", attempts+1, "err", cause)
+	} else {
+		slog.Warn("offramp: tap settlement failed, will retry",
+			"tap", tap, "attempt", attempts+1, "err", cause)
+	}
+	return nil
+}
+
+// reference is Switch's key for one round's payout, and the idempotency key
+// of the transfer that funds it.
 //
-// The first round keeps the bare tap id, which is what every order created
-// before rounds existed was sent under; a retry of one of those must still
-// find its own operation and not make a second.
+// Switch keys payouts on a UUID. The first round is the tap id itself; a
+// later round, sold again after a refund, needs a key of its own or Switch
+// would hand back the payout that was refunded. It is derived from the tap
+// and the round, so it is the same on every retry of that round.
 func reference(tap uuid.UUID, round int) string {
 	if round == 0 {
 		return tap.String()
 	}
-	return fmt.Sprintf("%s:r%d", tap, round)
+	return uuid.NewSHA1(tap, []byte(fmt.Sprintf("round:%d", round))).String()
 }
 
-// Track follows submitted orders to their outcome.
+// Track follows submitted payouts to their outcome.
 //
-// An order on chain is a question, not an answer: a provider fills it or the
-// Gateway refunds it, and until one of those has happened the merchant has
-// not been paid. Tick discharged the merchant's claim on submission because
-// that is what a filled order means; this is what puts the claim back when
-// the order is refunded instead, and sells again while there are rounds left.
-//
-// Outcomes are read from the Gateway itself rather than from the provider's
-// API. The contract is what actually holds or returns the money, and it
-// answers for every order without a credential.
+// A funded payout is a question, not an answer: Switch pays the bank or
+// refunds the cardholder, and until one of those has happened the merchant
+// has not been paid. Tick discharged the merchant's claim on submission
+// because that is what a completed payout means; this is what puts the claim
+// back when the payout fails instead, and sells again while there are rounds
+// left.
 func (s *Settler) Track(ctx context.Context) (resolved int, err error) {
 	if s.Orders == nil {
 		return 0, ErrNotConfigured
 	}
 
 	rows, err := s.Pool.Query(ctx, `
-		SELECT st.tap_id, st.from_address, st.sell_micro, st.tx_hash, st.order_id, st.round,
+		SELECT st.tap_id, st.tx_hash, st.order_id, st.round,
 		       t.merchant_id, t.currency, coalesce(st.deliver_minor, t.amount_minor - t.fee_minor)
 		  FROM card_tap_settlements st
 		  JOIN card_taps t ON t.id = st.tap_id
@@ -319,15 +332,13 @@ func (s *Settler) Track(ctx context.Context) (resolved int, err error) {
 		 ORDER BY st.created_at
 		 LIMIT 50`)
 	if err != nil {
-		return 0, fmt.Errorf("offramp: find submitted orders: %w", err)
+		return 0, fmt.Errorf("offramp: find submitted payouts: %w", err)
 	}
 
 	type submitted struct {
 		tap      uuid.UUID
-		from     string
-		sell     int64
 		txHash   *string
-		orderID  *string
+		ref      *string
 		round    int
 		merchant uuid.UUID
 		deliver  money.Amount
@@ -339,8 +350,7 @@ func (s *Settler) Track(ctx context.Context) (resolved int, err error) {
 			cur   string
 			minor int64
 		)
-		if err := rows.Scan(&o.tap, &o.from, &o.sell, &o.txHash, &o.orderID, &o.round,
-			&o.merchant, &cur, &minor); err != nil {
+		if err := rows.Scan(&o.tap, &o.txHash, &o.ref, &o.round, &o.merchant, &cur, &minor); err != nil {
 			rows.Close()
 			return 0, err
 		}
@@ -353,63 +363,33 @@ func (s *Settler) Track(ctx context.Context) (resolved int, err error) {
 	}
 
 	for _, o := range open {
-		var id [32]byte
-		switch {
-		case o.orderID != nil:
-			b, err := hex.DecodeString(strings.TrimPrefix(*o.orderID, "0x"))
-			if err != nil || len(b) != 32 {
-				return resolved, fmt.Errorf("offramp: tap %s has a malformed order id %q", o.tap, *o.orderID)
-			}
-			copy(id[:], b)
-
-		case o.txHash != nil:
-			// First sight of this order: learn its id from the transaction.
-			id, err = s.Orders.OrderID(ctx, *o.txHash, o.from, big.NewInt(o.sell))
-			if errors.Is(err, ErrNotMined) {
-				continue
-			}
-			if errors.Is(err, ErrOrderNotCreated) {
-				// Nothing was sold. The claim was discharged on the strength
-				// of a transaction that did not do what it was for, so this
-				// is a refund in everything but the event.
-				if err := s.refunded(ctx, o.tap, o.merchant, o.deliver, o.round, *o.txHash, err.Error()); err != nil {
-					return resolved, err
-				}
-				resolved++
-				continue
-			}
-			if err != nil {
-				slog.Warn("offramp: could not read order id", "tap", o.tap, "tx", *o.txHash, "err", err)
-				continue
-			}
-			if _, err := s.Pool.Exec(ctx, `
-				UPDATE card_tap_settlements
-				   SET order_id = $2, updated_at = now()
-				 WHERE tap_id = $1 AND state = 'submitted'`,
-				o.tap, "0x"+hex.EncodeToString(id[:])); err != nil {
-				return resolved, err
-			}
-
-		default:
-			// Submitted with neither is a row the old code could not have
-			// written; say so rather than poll it forever.
-			slog.Error("offramp: submitted order has no transaction hash", "tap", o.tap)
+		// Every payout Tick submits carries its Switch reference, a UUID.
+		// Anything else was submitted to the settlement gateway this
+		// replaced, which Switch cannot answer for; it is said, not polled.
+		if o.ref == nil || uuid.Validate(*o.ref) != nil {
+			slog.Error("offramp: submitted settlement has no Switch reference; follow it up by hand",
+				"tap", o.tap, "order", hashOf(o.ref), "tx", hashOf(o.txHash))
 			continue
 		}
 
-		info, err := s.Orders.Info(ctx, id)
+		tx := ""
+		if o.txHash != nil {
+			tx = *o.txHash
+		}
+		outcome, status, err := s.Orders.Outcome(ctx, *o.ref, tx)
 		if err != nil {
-			slog.Warn("offramp: could not read order", "tap", o.tap, "err", err)
+			slog.Warn("offramp: could not read payout", "tap", o.tap, "reference", *o.ref, "err", err)
 			continue
 		}
-		switch {
-		case info.Fulfilled:
+		switch outcome {
+		case Fulfilled:
 			if err := s.fulfilled(ctx, o.tap); err != nil {
 				return resolved, err
 			}
 			resolved++
-		case info.Refunded:
-			if err := s.refunded(ctx, o.tap, o.merchant, o.deliver, o.round, hashOf(o.txHash), "refunded by the gateway"); err != nil {
+		case Refunded:
+			why := "Switch reports " + status
+			if err := s.refunded(ctx, o.tap, o.merchant, o.deliver, o.round, *o.ref, why); err != nil {
 				return resolved, err
 			}
 			resolved++
@@ -447,7 +427,7 @@ func (s *Settler) fulfilled(ctx context.Context, tap uuid.UUID) error {
 // refund has been taken into account. The state predicate makes a second
 // tracker, or a second tick of this one, find nothing to do.
 func (s *Settler) refunded(
-	ctx context.Context, tap, merchant uuid.UUID, deliver money.Amount, round int, txHash, why string,
+	ctx context.Context, tap, merchant uuid.UUID, deliver money.Amount, round int, ref, why string,
 ) error {
 	next := round + 1
 	state := "pending"
@@ -460,10 +440,10 @@ func (s *Settler) refunded(
 			   SET state = $2, round = $3, order_id = NULL, tx_hash = NULL,
 			       last_error = $4, updated_at = now()
 			 WHERE tap_id = $1 AND state = 'submitted'`,
-			// The refunded order's transaction stays on the row, in words:
-			// tx_hash is cleared for the next round, and the ledger names
-			// the tap, so this is the only place the old hash survives.
-			tap, state, next, fmt.Sprintf("round %d (%s): %s", round, txHash, why))
+			// The refunded payout's reference stays on the row, in words:
+			// order_id is cleared for the next round, and offramp_payments
+			// keeps every round's reference and deposit address.
+			tap, state, next, fmt.Sprintf("round %d (%s): %s", round, ref, why))
 		if err != nil {
 			return err
 		}
@@ -478,7 +458,7 @@ func (s *Settler) refunded(
 			slog.Error("offramp: giving up on a tap settlement, the merchant is still owed",
 				"tap", tap, "rounds", next, "owed", deliver.String())
 		} else {
-			slog.Warn("offramp: order refunded, will sell again",
+			slog.Warn("offramp: payout refunded, will sell again",
 				"tap", tap, "round", round, "why", why)
 		}
 		return nil
@@ -487,7 +467,7 @@ func (s *Settler) refunded(
 
 func hashOf(h *string) string {
 	if h == nil {
-		return "no tx"
+		return "none"
 	}
 	return *h
 }
@@ -504,7 +484,7 @@ func (s *Settler) Run(ctx context.Context, every time.Duration) {
 		case <-ticker.C:
 			created, err := s.Tick(ctx)
 			if err != nil {
-				// Not configured is a deployment without a gateway, which is
+				// Not configured is a deployment without Switch, which is
 				// said once at boot; repeating it every tick adds nothing.
 				if !errors.Is(err, ErrNotConfigured) {
 					slog.Error("offramp: settle failed", "err", err)
