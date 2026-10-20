@@ -416,6 +416,19 @@ func (c *Client) SendCalls(
 	return c.waitUserOperation(ctx, account, sent.JSON200.UserOpHash)
 }
 
+// OperationFailedError means CDP reports the operation final and not
+// executed: it failed or was dropped, so nothing it carried moved. Any other
+// error from a send leaves that unknown -- the operation may yet land -- and
+// is retried with the same idempotency key, never treated as this.
+type OperationFailedError struct {
+	UserOpHash string
+	Reason     string
+}
+
+func (e *OperationFailedError) Error() string {
+	return fmt.Sprintf("cdp: user operation %s %s", e.UserOpHash, e.Reason)
+}
+
 // waitUserOperation polls until the operation is final and returns the
 // on-chain transaction hash. The user operation hash is not it: one
 // transaction bundles many operations, and it is the transaction that a
@@ -449,7 +462,7 @@ func (c *Client) waitUserOperation(ctx context.Context, account, userOpHash stri
 					}
 				}
 			}
-			return "", fmt.Errorf("cdp: user operation %s %s", userOpHash, reason)
+			return "", &OperationFailedError{UserOpHash: userOpHash, Reason: reason}
 		}
 
 		select {

@@ -291,3 +291,42 @@ func TestAnUnknownStatusIsNeverGuessed(t *testing.T) {
 		t.Errorf("outcome %v err %v, want Open and an error", got, err)
 	}
 }
+
+// fakeLiquidity records what Fund asked to have on hand, and can refuse.
+type fakeLiquidity struct {
+	account, reference string
+	need               int64
+	err                error
+}
+
+func (f *fakeLiquidity) Ensure(_ context.Context, account string, need int64, reference string) error {
+	f.account, f.need, f.reference = account, need, reference
+	return f.err
+}
+
+// A cardholder whose USDC is in the yield vault has what the payout needs
+// released first; one the vault cannot meet is not sent at all.
+func TestFundingReleasesFromTheVaultFirst(t *testing.T) {
+	sw, s, liq := newSwitch(), &fakeSender{}, &fakeLiquidity{}
+	c := newClient(s, sw)
+	c.Liquidity = liq
+	p, err := c.Open(context.Background(), order())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Fund(context.Background(), cardholder, p); err != nil {
+		t.Fatalf("Fund: %v", err)
+	}
+	if liq.account != cardholder || liq.need != 1_194_844 || liq.reference != "offramp:"+tapRef {
+		t.Errorf("ensured %d at %s for %q", liq.need, liq.account, liq.reference)
+	}
+
+	liq.err = errors.New("the vault can release 0")
+	s.sent = 0
+	if _, err := c.Fund(context.Background(), cardholder, p); err == nil {
+		t.Fatal("funded with nothing released")
+	}
+	if s.sent != 0 {
+		t.Error("sent a transfer the account could not cover")
+	}
+}

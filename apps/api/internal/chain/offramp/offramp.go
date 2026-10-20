@@ -112,11 +112,20 @@ const (
 	Refunded
 )
 
+// Liquidity makes sure an account holds what is about to be sent from it,
+// out of the yield vault if need be. Satisfied by yield.Service.
+type Liquidity interface {
+	Ensure(ctx context.Context, account string, need int64, reference string) error
+}
+
 // Client sells a cardholder's USDC for a merchant's naira through Switch.
 type Client struct {
 	Sender Sender
 	Switch Switch
 	USDC   common.Address
+	// Liquidity is nil when there is no vault, and every payout is sent
+	// from what the account holds, as before.
+	Liquidity Liquidity
 }
 
 // Open finds or opens the payout for an order.
@@ -223,6 +232,11 @@ func (c *Client) Fund(ctx context.Context, from string, p Payment) (string, erro
 	transfer, err := base.PackTransfer(p.Address, big.NewInt(p.Sell))
 	if err != nil {
 		return "", err
+	}
+	if c.Liquidity != nil {
+		if err := c.Liquidity.Ensure(ctx, from, p.Sell, "offramp:"+p.Reference); err != nil {
+			return "", err
+		}
 	}
 	txHash, err := c.Sender.SendCalls(ctx, from, []cdp.Call{{To: c.USDC, Data: transfer}}, "offramp:"+p.Reference)
 	if err != nil {

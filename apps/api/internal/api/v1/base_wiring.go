@@ -14,6 +14,7 @@ import (
 	"github.com/usezoracle/tapp/api/config"
 	"github.com/usezoracle/tapp/api/internal/chain/base"
 	"github.com/usezoracle/tapp/api/internal/chain/cdp"
+	"github.com/usezoracle/tapp/api/internal/chain/yield"
 	"github.com/usezoracle/tapp/api/internal/chain/gas"
 	"github.com/usezoracle/tapp/api/storage"
 	"github.com/usezoracle/tapp/api/utils/logger"
@@ -34,6 +35,10 @@ type BaseRail struct {
 	Withdrawals *base.Withdrawals
 	Chain       *base.Chain
 	ChainID     int64
+
+	// Yield moves idle USDC into the vault and back, and credits what it
+	// earns. Nil when no vault is configured.
+	Yield *yield.Service
 }
 
 // NewBaseRail builds the deposit rail from configuration.
@@ -87,6 +92,7 @@ func NewBaseRail(ctx context.Context) (*BaseRail, error) {
 	// rail that quietly carried on minting seed-derived addresses would hide
 	// that from them until the day the seed had to be produced.
 	var smart base.SmartAccounts
+	var signer *cdp.Client
 	if cdpCfg := config.CDPConfig(); cdpCfg.Enabled() {
 		client, err := cdp.New(cdp.Config{
 			APIKeyID: cdpCfg.APIKeyID, APIKeySecret: cdpCfg.APIKeySecret,
@@ -96,7 +102,7 @@ func NewBaseRail(ctx context.Context) (*BaseRail, error) {
 		if err != nil {
 			return nil, err
 		}
-		smart = client
+		smart, signer = client, client
 		addresses.SmartAccounts = client
 		logger.Infof("base: new deposit addresses are CDP smart accounts on chain %d, gas sponsored", chainID)
 	} else {
@@ -141,6 +147,34 @@ func NewBaseRail(ctx context.Context) (*BaseRail, error) {
 		}
 	}
 
+	withdrawals := &base.Withdrawals{
+		Pool: storage.Pool, Chain: chain,
+		Addresses:     addresses,
+		SmartAccounts: smart,
+	}
+
+	// Yield, from each cardholder's own smart account. The vault's address
+	// also joins the deposit guards: USDC it releases back into an account
+	// is that account's own money, not a deposit.
+	var earn *yield.Service
+	if yc := config.YieldConfig(); yc.Configured() {
+		if signer == nil {
+			return nil, fmt.Errorf("YIELD_VAULT_ADDRESS is set but CDP is not, so no account can use the vault")
+		}
+		earn = &yield.Service{
+			Pool:     storage.Pool,
+			Vault:    &yield.Vault{Client: client, Address: yc.Vault, USDC: common.HexToAddress(usdc)},
+			Sender:   signer,
+			Sweeping: yc.Sweeping,
+			SweepMin: yc.SweepMin,
+			Users:    yc.Users,
+		}
+		deposits.Vault = yc.Vault
+		withdrawals.Liquidity = earn
+		logger.Infof("yield: vault %s; sweeping=%t for %d listed users (0 = everyone)",
+			yc.Vault.Hex(), yc.Sweeping, len(yc.Users))
+	}
+
 	return &BaseRail{
 		Gas: recorder,
 		GasWallet: &gas.Wallet{
@@ -165,11 +199,8 @@ func NewBaseRail(ctx context.Context) (*BaseRail, error) {
 		// SmartAccounts come from the same objects the deposit side uses, so
 		// a withdrawal cannot disagree with a deposit about where somebody's
 		// money is.
-		Withdrawals: &base.Withdrawals{
-			Pool: storage.Pool, Chain: chain,
-			Addresses:     addresses,
-			SmartAccounts: smart,
-		},
+		Withdrawals: withdrawals,
+		Yield:       earn,
 	}, nil
 }
 
