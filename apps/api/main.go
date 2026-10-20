@@ -116,6 +116,12 @@ func main() {
 			// seed-derived funds that only it can move. Starting it again
 			// would empty every account the offramp spends from.
 			go baseRail.Withdrawals.Run(context.Background(), apiv1.BasePollInterval())
+
+			// Idle USDC into the vault, and what it earns into balances.
+			// See docs/yield.md.
+			if baseRail.Yield != nil {
+				go baseRail.Yield.Run(context.Background(), config.YieldConfig().Interval)
+			}
 		}
 
 		// Sell each tap's USDC to Switch, from the cardholder's own

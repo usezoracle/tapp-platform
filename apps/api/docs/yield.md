@@ -1,7 +1,8 @@
 # Yield on cardholders' USDC
 
-Status: proposed 2026-10-20. Nothing is built. Lands after the demo, behind
-`YIELD_ENABLED` (off by default).
+Status: built 2026-10-20 on branch `yield-design`, not deployed. Y1-Y5 below
+were taken as proposed. Off until `YIELD_VAULT_ADDRESS` is set; sweeping also
+needs `YIELD_ENABLED`.
 
 ## The goal
 
@@ -46,8 +47,11 @@ A worker, every few minutes, per cardholder account:
 - **Sweep** what the account holds in USDC, if it is at least
   `YIELD_SWEEP_MIN` (proposed 1 USDC), in one sponsored operation:
   `approve(vault, x)` then `deposit(x, account)`.
-- **Record** a `vault_movements` row (`deposit`, amount, tx hash) only once
-  the operation confirms.
+- **Record** a `vault_movements` row before sending (`sending`), and mark it
+  `confirmed` when CDP reports it landed, or `failed` only when CDP reports
+  it did not (`cdp.OperationFailedError`). An answer that was lost leaves it
+  `sending`, and it is sent again under the same idempotency key until it
+  resolves, so it lands once.
 
 The ledger does not move. The USDC was the cardholder's before the sweep and
 is still theirs after; only where it sits changed.
@@ -60,8 +64,10 @@ front of the transfer they already make:
 1. Read the account's USDC balance on chain.
 2. If it is short of what must be sent, **release** the shortfall:
    `withdraw(shortfall, account, account)`, as its **own** sponsored
-   operation, with idempotency key `release:<reference>`. Wait for it to
-   confirm and record a `vault_movements` row (`release`).
+   operation, with idempotency key `release:<spend>` (`release:<spend>:<n>`
+   after a failed attempt). A release for the spend still `sending` is
+   finished first. A release the vault cannot meet (`maxWithdraw`) is not
+   sent.
 3. Send the transfer exactly as today.
 
 The release and the transfer are two operations, not one batch. corridor-api
@@ -84,8 +90,12 @@ new       = earned - already_credited               -- yield_credits
 ```
 
 If `new` is at least one cent, it is credited to the cardholder's available
-USD in the ledger in whole cents. The double entry is against a platform
-`vault_yield` account. The fraction under a cent carries to the next run.
+USD in the ledger in whole cents (`movements.YieldCredited`, against
+`external`, like a deposit), with a `yield_credits` row keyed by user and
+day. The fraction under a cent carries to the next run. A cardholder with a
+vault operation still `sending` is skipped: their principal is unknown, and a
+deposit counted as missing would be credited as yield. The job runs with the
+sweeper every `YIELD_INTERVAL_SECONDS` and credits at most once per UTC day.
 This is what makes the balance the app shows grow, with no app change.
 
 Ledger USD is in cents, so a small balance shows its yield slowly. $3 at 5%
@@ -108,13 +118,15 @@ never auto-corrected.
 
 | Where | Change |
 |---|---|
-| `internal/chain/yield` (new) | vault calls (deposit, withdraw, value), sweeper, accrual job |
-| migration | `vault_movements`, `yield_credits` |
-| `internal/chain/offramp/offramp.go` `Fund` | release the shortfall before the transfer |
-| `internal/chain/base/withdrawals.go` | the same release before sending |
-| `internal/ledger/movements` | `YieldCredit` movement |
-| `main.go` | start the sweeper and accrual job when `YIELD_ENABLED` |
-| config | `YIELD_ENABLED`, `YIELD_VAULT_ADDRESS`, `YIELD_SWEEP_MIN`, `YIELD_SWEEP_INTERVAL`, `YIELD_ACCRUAL_INTERVAL` |
+| `internal/chain/yield` (new) | vault reads and calls; `Service`: `Ensure` (release), `Sweep`, `Accrue`, `Resolve` |
+| migration `0031_yield.sql` | `vault_movements`, `yield_credits` |
+| `internal/chain/offramp/offramp.go` `Fund` | `Liquidity.Ensure` before the transfer |
+| `internal/chain/base/withdrawals.go` | the same before sending |
+| `internal/chain/base/deposits.go` | USDC from the vault is not a deposit |
+| `internal/chain/cdp` | `OperationFailedError`: final and not executed, as opposed to unknown |
+| `internal/ledger/movements/yield.go` | `YieldCredited` |
+| `main.go`, `base_wiring.go`, `offramp_wiring.go` | wiring |
+| config | `YIELD_VAULT_ADDRESS`, `YIELD_ENABLED`, `YIELD_USERS`, `YIELD_SWEEP_MIN_MICRO`, `YIELD_INTERVAL_SECONDS` |
 
 No route, payload or response changes.
 
@@ -125,7 +137,7 @@ No route, payload or response changes.
 | Y1 | Leave a liquid buffer in each account so small taps need no release? | **No buffer.** Settlement runs after the till, so a release only adds seconds to the merchant's payout, never to the tap. A buffer is money that does not earn. |
 | Y2 | Minimum sweep | **1 USDC.** Every sweep is a sponsored operation the platform pays gas for. |
 | Y3 | The vault loses value (bad debt, share price falls), so `earned` goes negative | **Stop crediting and alert.** Never debit a cardholder automatically. The operator decides; until then the platform carries the gap. |
-| Y4 | Do yield credits appear in the activity feed? | The feed is ledger history, so a credit appears as a line. **One credit per user per day at most**, so the feed gets at most one "Yield" line a day, and only after checking the PWA renders an unknown kind sensibly. If it does not, credits are left out of the feed and show in the balance only. |
+| Y4 | Do yield credits appear in the activity feed? | **Yes, at most one line per user per day.** The credit's reason is `deposit.credited:yield`; the PWA names entries by reason prefix, so it reads "USD received" with no app change. |
 | Y5 | Rollout | **Enable for one test account first** (allow-list), run a tap and a withdrawal through a release on mainnet, then everyone. |
 
 ## Risks

@@ -57,6 +57,12 @@ type Withdrawals struct {
 	// customer funds would fail with nothing to send. Nil falls back to the
 	// treasury, which is right only for a deployment that still pools.
 	SmartAccounts SmartAccountSender
+
+	// Liquidity releases from the yield vault what a withdrawal needs and
+	// the account does not hold. Nil when there is no vault.
+	Liquidity interface {
+		Ensure(ctx context.Context, account string, need int64, reference string) error
+	}
 }
 
 // canSend reports whether a withdrawal has any way out at all.
@@ -92,6 +98,11 @@ func (w *Withdrawals) send(
 			return "", err
 		}
 		if ok {
+			if w.Liquidity != nil {
+				if err := w.Liquidity.Ensure(ctx, from, micro, "withdrawal:"+id.String()); err != nil {
+					return "", err
+				}
+			}
 			return w.SmartAccounts.SweepSmartAccount(
 				ctx, from, w.Chain.USDC, dst, amount, "withdrawal:"+id.String())
 		}

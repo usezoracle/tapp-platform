@@ -534,6 +534,46 @@ func TestARefundFromASwitchDepositAddressIsNotADeposit(t *testing.T) {
 	}
 }
 
+// USDC the yield vault releases into an account is that account's own money,
+// already in the balance, on its way to a spend. Crediting it would count it
+// twice.
+func TestAReleaseFromTheYieldVaultIsNotADeposit(t *testing.T) {
+	addrs, deposits := fixture(t)
+	ctx := context.Background()
+	user := uuid.New()
+	deposits.Vault = common.HexToAddress("0xeE8F4eC5672F09119b96Ab6fB59C27E1b7e44b61")
+
+	address, err := addrs.For(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: "0x00000000000000000000000000000000000000A1",
+		To: address, AmountMicro: 5_000_000, BlockNumber: 100,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deposits.Record(ctx, Transfer{
+		TxHash: txHash(t), LogIndex: 0, From: strings.ToLower(deposits.Vault.Hex()),
+		To: address, AmountMicro: 1_100_325, BlockNumber: 101,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if credited, err := deposits.CreditConfirmed(ctx, 200); err != nil {
+		t.Fatalf("CreditConfirmed: %v", err)
+	} else if credited != 1 {
+		t.Fatalf("credited %d deposits, want 1 -- the release was counted as money arriving", credited)
+	}
+	b, err := ledger.Balance(ctx, deposits.Pool, ledger.User(user), ledger.KindAvailable, money.USD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Minor() != 500 {
+		t.Errorf("balance = %s, want $5.00 -- the release was credited as a deposit", b)
+	}
+}
+
 // Nothing is swept into the treasury any more, so a withdrawal paid from it
 // would fail with nothing to send. It comes out of the person's own deposit
 // address instead, sponsored, so withdrawing costs them no gas.

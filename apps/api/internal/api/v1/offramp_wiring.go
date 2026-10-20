@@ -61,14 +61,18 @@ func SharedSettler() *offramp.Settler {
 			return
 		}
 
-		settler = &offramp.Settler{
-			Pool: storage.Pool,
-			Orders: &offramp.Client{
-				Sender: signer,
-				Switch: onswitch.New(switchCfg.BaseURL, switchCfg.ServiceKey),
-				USDC:   common.HexToAddress(viper.GetString("BASE_USDC_CONTRACT")),
-			},
+		orders := &offramp.Client{
+			Sender: signer,
+			Switch: onswitch.New(switchCfg.BaseURL, switchCfg.ServiceKey),
+			USDC:   common.HexToAddress(viper.GetString("BASE_USDC_CONTRACT")),
 		}
+		// A cardholder whose USDC is in the yield vault has it released
+		// before the payout is funded. Assigned only when there is one, so
+		// the interface is nil, not a nil *yield.Service.
+		if r := Rail(); r != nil && r.Yield != nil {
+			orders.Liquidity = r.Yield
+		}
+		settler = &offramp.Settler{Pool: storage.Pool, Orders: orders}
 		logger.Infof("offramp: card taps settle through Switch (%s), "+
 			"sold from each cardholder's own account on chain %d", switchCfg.BaseURL, chainID)
 	})

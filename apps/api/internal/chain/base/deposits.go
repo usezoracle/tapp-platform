@@ -52,6 +52,11 @@ type Deposits struct {
 	// arrival is not a deposit either: the tap already spent this money, and
 	// the settler will sell it again or the merchant is owed it. See Record.
 	Gateway common.Address
+
+	// Vault is the yield vault. USDC from it is a cardholder's own money
+	// released back into their account to be spent, already in their
+	// balance. Zero disables the check.
+	Vault common.Address
 }
 
 func (d *Deposits) confirmations() uint64 {
@@ -102,6 +107,10 @@ func (d *Deposits) Record(ctx context.Context, t Transfer) error {
 	}
 	if d.Gateway != (common.Address{}) &&
 		strings.EqualFold(t.From, d.Gateway.Hex()) {
+		return nil
+	}
+	if d.Vault != (common.Address{}) &&
+		strings.EqualFold(t.From, d.Vault.Hex()) {
 		return nil
 	}
 
