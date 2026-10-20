@@ -137,10 +137,17 @@ func (c *Client) Initiate(ctx context.Context, r InitiateRequest) (Payment, erro
 	return p, nil
 }
 
-// Confirm tells Switch which transaction carried the deposit. Safe to repeat.
+// Confirm tells Switch which transaction carried the deposit. Safe to repeat:
+// Switch answers a second confirm with DUPLICATE_REQUEST_EXISTS, which means
+// the first one was taken, and that is success.
 func (c *Client) Confirm(ctx context.Context, reference, txHash string) error {
 	body := map[string]string{"reference": reference, "hash": txHash}
-	return c.call(ctx, http.MethodPost, "/payment/confirm", nil, body, nil)
+	err := c.call(ctx, http.MethodPost, "/payment/confirm", nil, body, nil)
+	var refused *Error
+	if errors.As(err, &refused) && refused.Message == "DUPLICATE_REQUEST_EXISTS" {
+		return nil
+	}
+	return err
 }
 
 // Status reads a payment by its reference.
