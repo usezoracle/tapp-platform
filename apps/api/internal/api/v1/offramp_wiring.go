@@ -141,6 +141,15 @@ func RecordTapSettlement(s *offramp.Settler) func(context.Context, pgx.Tx, tap.C
 		if err != nil {
 			return err
 		}
+		if sell < offramp.MinSell*102/100 {
+			// Switch would refuse the payout on every round, leaving the
+			// merchant unpaid and the tap's stock held for good. Declined
+			// here, the charge rolls back and the card is not charged. The
+			// 2% is headroom for the mid differing from the rate Switch
+			// prices the payout at a moment later: a tap that only just
+			// clears the minimum here must clear it there too.
+			return offramp.ErrBelowMinimum
+		}
 		return s.Record(ctx, tx, c.TapID, address, sell, usdc)
 	}
 }

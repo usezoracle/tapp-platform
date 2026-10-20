@@ -33,6 +33,15 @@ import (
 // ErrNotConfigured means there is no provider to sell through.
 var ErrNotConfigured = errors.New("offramp: no settlement provider configured")
 
+// MinSell is the least USDC, in micro-units, Switch opens a payout for: it
+// answers anything smaller with "Minimum amount per transaction is 1 USDC",
+// on every attempt.
+const MinSell = 1_000_000
+
+// ErrBelowMinimum means a tap's USDC leg sells less than MinSell, so no
+// payout could ever deliver it.
+var ErrBelowMinimum = errors.New("offramp: the payout is below Switch's 1 USDC minimum")
+
 // Sender submits sponsored calls from a smart account. Satisfied by cdp.Client.
 type Sender interface {
 	SendCalls(ctx context.Context, account string, calls []cdp.Call, idem string) (string, error)

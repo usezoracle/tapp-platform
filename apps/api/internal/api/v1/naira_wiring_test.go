@@ -191,18 +191,19 @@ func TestTheSplitDecidesTheLegs(t *testing.T) {
 		t.Errorf("read model: rail=%s legs=%+v err=%v", tx.SettlementRail, tx.Legs, err)
 	}
 
-	// Both: ₦1,000 from the balance, ₦600 bought. The fee (₦8) comes out
-	// of the naira, so the wallet pays ₦992 and the order delivers ₦600.
-	id, err = w.charge(t, money.Naira(1_600), money.Naira(1_000))
+	// Both: ₦1,000 from the balance, ₦2,000 bought. The fee (₦15) comes
+	// out of the naira, so the wallet pays ₦985 and the order delivers
+	// ₦2,000.
+	id, err = w.charge(t, money.Naira(3_000), money.Naira(1_000))
 	if err != nil {
 		t.Fatalf("mixed tap: %v", err)
 	}
 	ngn, usdc, ngnState, usdcState = w.legs(t, id)
-	if ngn != 99_200 || ngnState != naira.Queued || usdc != 60_000 || usdcState != "pending" {
-		t.Fatalf("mixed tap legs: ngn=%d(%s) usdc=%d(%s); want ₦992 and ₦600", ngn, ngnState, usdc, usdcState)
+	if ngn != 98_500 || ngnState != naira.Queued || usdc != 200_000 || usdcState != "pending" {
+		t.Fatalf("mixed tap legs: ngn=%d(%s) usdc=%d(%s); want ₦985 and ₦2,000", ngn, ngnState, usdc, usdcState)
 	}
-	if ngn+usdc != 159_200 {
-		t.Errorf("legs sum to %d, want 159200 (what the merchant is owed)", ngn+usdc)
+	if ngn+usdc != 298_500 {
+		t.Errorf("legs sum to %d, want 298500 (what the merchant is owed)", ngn+usdc)
 	}
 	tx, _ = transactions.Get(ctx, w.pool, id)
 	if tx.Status != transactions.StatusPending || tx.SettlementRail != transactions.RailMixed || len(tx.Legs) != 2 {
@@ -244,24 +245,24 @@ func TestTheSplitDecidesTheLegs(t *testing.T) {
 func TestNairaTooSmallForTheRailGoesWithTheUSDC(t *testing.T) {
 	w := newSettlementWorld(t)
 
-	// ₦1,500 with ₦11.01 on hand: the ₦7.50 fee leaves a ₦3.51 naira leg,
+	// ₦2,000 with ₦11.01 on hand: the ₦10 fee leaves a ₦1.01 naira leg,
 	// whose ₦11.01 cannot pay the ₦15 sweep.
-	id, err := w.charge(t, money.Naira(1_500), money.New(1_101, money.NGN))
+	id, err := w.charge(t, money.Naira(2_000), money.New(1_101, money.NGN))
 	if err != nil {
 		t.Fatalf("mixed tap: %v", err)
 	}
 	ngn, usdc, ngnState, usdcState := w.legs(t, id)
-	if ngnState != "" || usdc != 149_250 || usdcState != "pending" {
-		t.Fatalf("legs: ngn=%d(%s) usdc=%d(%s); want no naira leg and an order for all ₦1,492.50", ngn, ngnState, usdc, usdcState)
+	if ngnState != "" || usdc != 199_000 || usdcState != "pending" {
+		t.Fatalf("legs: ngn=%d(%s) usdc=%d(%s); want no naira leg and an order for all ₦1,990", ngn, ngnState, usdc, usdcState)
 	}
 
 	// Enough naira to pay the sweep keeps its own leg.
-	id, err = w.charge(t, money.Naira(1_500), money.Naira(100))
+	id, err = w.charge(t, money.Naira(2_000), money.Naira(100))
 	if err != nil {
 		t.Fatalf("mixed tap: %v", err)
 	}
-	if ngn, usdc, ngnState, _ = w.legs(t, id); ngn != 9_250 || ngnState != naira.Queued || usdc != 140_000 {
-		t.Fatalf("legs: ngn=%d(%s) usdc=%d; want ₦92.50 queued and ₦1,400", ngn, ngnState, usdc)
+	if ngn, usdc, ngnState, _ = w.legs(t, id); ngn != 9_000 || ngnState != naira.Queued || usdc != 190_000 {
+		t.Fatalf("legs: ngn=%d(%s) usdc=%d; want ₦90 queued and ₦1,900", ngn, ngnState, usdc)
 	}
 
 	// All naira, nothing to join.
@@ -271,6 +272,39 @@ func TestNairaTooSmallForTheRailGoesWithTheUSDC(t *testing.T) {
 	}
 	if ngn, _, ngnState, usdcState = w.legs(t, id); ngnState != naira.Queued || usdcState != "" {
 		t.Fatalf("legs: ngn=%d(%s) order=%q; want a naira leg and no order", ngn, ngnState, usdcState)
+	}
+}
+
+// A USDC leg below Switch's 1 USDC minimum could never be paid out, so the
+// tap is declined at the till with a code the merchant app can show, and the
+// charge rolls back.
+func TestAUSDCLegBelowTheMinimumIsDeclinedAtTheTill(t *testing.T) {
+	w := newSettlementWorld(t)
+
+	// At ₦1,500 per $1, ₦1,000 owed sells 0.67 USDC.
+	_, err := w.charge(t, money.Naira(1_000), money.Zero(money.NGN))
+	if !errors.Is(err, offramp.ErrBelowMinimum) {
+		t.Fatalf("₦1,000 tap: %v, want ErrBelowMinimum", err)
+	}
+	// A mostly-naira tap with a small bought remainder is declined too.
+	if _, err := w.charge(t, money.Naira(2_000), money.Naira(1_500)); !errors.Is(err, offramp.ErrBelowMinimum) {
+		t.Fatalf("₦500 USDC leg: %v, want ErrBelowMinimum", err)
+	}
+	var n int
+	if err := w.pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM card_taps WHERE cardholder_id = $1`, w.cardholder).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%d taps recorded, want 0 (the declined charges rolled back)", n)
+	}
+	if code, ok := tapErrorCode(offramp.ErrBelowMinimum); !ok || code != "amount_below_minimum" {
+		t.Errorf("code = %q, want amount_below_minimum", code)
+	}
+
+	// ₦1,600 sells 1.06 USDC, which clears it.
+	if _, err := w.charge(t, money.Naira(1_600), money.Zero(money.NGN)); err != nil {
+		t.Fatalf("₦1,600 tap: %v", err)
 	}
 }
 

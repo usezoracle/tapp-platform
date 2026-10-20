@@ -9,6 +9,7 @@ import (
 
 	"github.com/usezoracle/tapp/api/internal/card/auth"
 	"github.com/usezoracle/tapp/api/internal/card/tap"
+	"github.com/usezoracle/tapp/api/internal/chain/offramp"
 	"github.com/usezoracle/tapp/api/internal/ledger/movements"
 	"github.com/usezoracle/tapp/api/internal/money"
 	"github.com/usezoracle/tapp/api/internal/settlement/naira"
@@ -90,6 +91,12 @@ func tapRefusal(err error) (tapRefusalMapping, bool) {
 		// there is nothing to pay the merchant from. The card is not charged.
 		{naira.ErrNoWallet, http.StatusConflict, "cardholder_wallet_required",
 			"This card's naira balance has no bank wallet to pay from. The cardholder must open a naira account in their app."},
+		// What the tap must sell is below the least the payout provider
+		// takes, so the merchant could never be paid. The card is not
+		// charged. The merchant app shows this message for a code it does
+		// not know.
+		{offramp.ErrBelowMinimum, http.StatusUnprocessableEntity, "amount_below_minimum",
+			"This amount is too small to pay by card. Card payments start at about ₦1,400."},
 	} {
 		if errors.Is(err, m.target) {
 			return m, true
