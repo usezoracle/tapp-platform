@@ -238,6 +238,42 @@ func TestTheSplitDecidesTheLegs(t *testing.T) {
 	}
 }
 
+// A few naira left over from earlier conversions do not become a bank
+// transfer the rail's ₦15 fee makes impossible: Switch pays them with the
+// USDC leg. On their own there is no USDC leg to join, and they stay naira.
+func TestNairaTooSmallForTheRailGoesWithTheUSDC(t *testing.T) {
+	w := newSettlementWorld(t)
+
+	// ₦1,500 with ₦11.01 on hand: the ₦7.50 fee leaves a ₦3.51 naira leg,
+	// whose ₦11.01 cannot pay the ₦15 sweep.
+	id, err := w.charge(t, money.Naira(1_500), money.New(1_101, money.NGN))
+	if err != nil {
+		t.Fatalf("mixed tap: %v", err)
+	}
+	ngn, usdc, ngnState, usdcState := w.legs(t, id)
+	if ngnState != "" || usdc != 149_250 || usdcState != "pending" {
+		t.Fatalf("legs: ngn=%d(%s) usdc=%d(%s); want no naira leg and an order for all ₦1,492.50", ngn, ngnState, usdc, usdcState)
+	}
+
+	// Enough naira to pay the sweep keeps its own leg.
+	id, err = w.charge(t, money.Naira(1_500), money.Naira(100))
+	if err != nil {
+		t.Fatalf("mixed tap: %v", err)
+	}
+	if ngn, usdc, ngnState, _ = w.legs(t, id); ngn != 9_250 || ngnState != naira.Queued || usdc != 140_000 {
+		t.Fatalf("legs: ngn=%d(%s) usdc=%d; want ₦92.50 queued and ₦1,400", ngn, ngnState, usdc)
+	}
+
+	// All naira, nothing to join.
+	id, err = w.charge(t, money.Naira(12), money.Naira(12))
+	if err != nil {
+		t.Fatalf("naira tap: %v", err)
+	}
+	if ngn, _, ngnState, usdcState = w.legs(t, id); ngnState != naira.Queued || usdcState != "" {
+		t.Fatalf("legs: ngn=%d(%s) order=%q; want a naira leg and no order", ngn, ngnState, usdcState)
+	}
+}
+
 // A naira leg with nowhere to go, or nothing to come from, refuses the tap
 // -- and the charge rolls back with it.
 func TestANairaLegNobodyCanPayIsRefusedAtTheTill(t *testing.T) {

@@ -81,6 +81,14 @@ func (w *Worker) sweepFee() money.Amount {
 	return DefaultSweepFee
 }
 
+// Covers says whether a tap whose naira paid funded leaves anything to
+// sweep once the rail's sender fee is taken. A leg that does not is refused
+// by sweep, on every attempt, for as long as the fee stands.
+func (w *Worker) Covers(funded money.Amount) bool {
+	amount, err := funded.Sub(w.sweepFee())
+	return err == nil && amount.IsPositive()
+}
+
 func (w *Worker) bankFee() money.Amount {
 	if w.BankFee.IsPositive() {
 		return w.BankFee
@@ -288,10 +296,13 @@ func (w *Worker) sweep(ctx context.Context, s *Settlement) error {
 		return w.fail(ctx, s, ErrNoRail.Error())
 	}
 	fee := w.sweepFee()
-	amount, err := s.Funded.Sub(fee)
-	if err != nil || !amount.IsPositive() {
+	if !w.Covers(s.Funded) {
 		return w.fail(ctx, s, fmt.Sprintf(
 			"the naira share %s does not cover the rail's %s sweep fee", s.Funded, fee))
+	}
+	amount, err := s.Funded.Sub(fee)
+	if err != nil {
+		return w.fail(ctx, s, err.Error())
 	}
 	if amount.Minor() < s.Amount.Minor() {
 		slog.Warn("naira: the sweep falls short of the leg; the platform's wallet makes up the difference",

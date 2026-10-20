@@ -99,6 +99,18 @@ func RecordTapSettlement(s *offramp.Settler) func(context.Context, pgx.Tx, tap.C
 	return func(ctx context.Context, tx pgx.Tx, c tap.Charged) error {
 		ngn, usdc := c.Legs()
 
+		// A naira share too small for the bank rail to move -- it does not
+		// cover the ₦15 sweep fee -- would fail on every attempt and hold
+		// the tap unsettled forever. A share that small is the remainder of
+		// earlier conversions bought in whole cents, and Switch sold only
+		// what each of those taps delivered, so the USDC behind it is still
+		// in the cardholder's account on chain: Switch pays it, with the
+		// rest. Only alongside a USDC leg, because
+		// Switch will not open a payout for a few naira on its own.
+		if ngn.IsPositive() && usdc.IsPositive() && !SharedNairaWorker().Covers(c.Funding.NGN) {
+			ngn, usdc = money.Zero(ngn.Currency()), c.Owed()
+		}
+
 		if ngn.IsPositive() {
 			if err := naira.Record(ctx, tx, c.TapID, c.Cardholder, c.Merchant, nairaRail(), ngn, c.Funding.NGN); err != nil {
 				return err
